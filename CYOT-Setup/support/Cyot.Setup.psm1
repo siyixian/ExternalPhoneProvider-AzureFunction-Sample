@@ -307,6 +307,164 @@ function Get-CyotInitialGraphContext {
     }
 }
 
+function Get-CyotResourceProviderRequirements {
+    @(
+        @{ Namespace = 'Microsoft.Web'; Type = 'sites' }
+        @{ Namespace = 'Microsoft.Storage'; Type = 'storageAccounts' }
+        @{ Namespace = 'Microsoft.KeyVault'; Type = 'vaults' }
+        @{ Namespace = 'Microsoft.OperationalInsights'; Type = 'workspaces' }
+        @{ Namespace = 'Microsoft.Insights'; Type = 'components' }
+        @{ Namespace = 'Microsoft.ManagedIdentity'; Type = 'userAssignedIdentities' }
+    )
+}
+
+function Get-CyotResourceProviders {
+    param([string] $SubscriptionId)
+
+    foreach ($provider in Get-CyotResourceProviderRequirements) {
+        $registration = Invoke-CyotAz provider show --namespace $provider.Namespace --subscription $SubscriptionId --output json |
+            ConvertFrom-Json
+        if (-not $registration -or -not $registration.PSObject.Properties['registrationState'] -or
+            $registration.registrationState -notin @('Registered', 'Registering', 'NotRegistered', 'Unregistering')) {
+            throw "Azure returned an unsupported registration state for '$($provider.Namespace)'."
+        }
+        if ($registration.registrationState -eq 'Unregistering') {
+            throw "Resource provider '$($provider.Namespace)' is being unregistered. Let that operation finish before rerunning setup; it will not be reversed automatically."
+        }
+        $locations = @()
+        if ($registration.PSObject.Properties['resourceTypes'] -and $registration.resourceTypes) {
+            $locations = @($registration.resourceTypes | Where-Object { $_ -and $_.resourceType -eq $provider.Type } | ForEach-Object locations)
+        }
+        [pscustomobject]@{
+            Namespace = $provider.Namespace; Type = $provider.Type
+            RegistrationState = $registration.registrationState; Locations = $locations
+        }
+    }
+}
+
+function Test-CyotProviderLocation {
+    param($Provider, [string] $Location)
+
+    return @($Provider.Locations | Where-Object { ($_ -replace '[^a-zA-Z0-9]', '') -ieq $Location }).Count -gt 0
+}
+
+function Assert-CyotProviderLocations {
+    param([object[]] $Providers, [string] $Location)
+
+    foreach ($provider in $Providers) {
+        if ($provider.RegistrationState -eq 'Registered' -and -not (Test-CyotProviderLocation $provider $Location)) {
+            throw "'$($provider.Namespace)/$($provider.Type)' is unavailable in '$Location'. Choose another location."
+        }
+    }
+}
+
+function Assert-CyotPremiumLocation {
+    param([hashtable] $Inputs)
+
+    $endpoint = "https://management.azure.com/subscriptions/$($Inputs.SubscriptionId)/providers/Microsoft.Web/geoRegions"
+    $required = @{ 'api-version' = '2024-04-01'; sku = 'ElasticPremium'; linuxWorkersEnabled = 'true' }
+    $parameters = @{} + $required
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $queryPath = Join-Path ([IO.Path]::GetTempPath()) "cyot-regions-$([Guid]::NewGuid().ToString('N')).json"
+    try {
+        for ($pageNumber = 1; $pageNumber -le 20; $pageNumber++) {
+            # A query file keeps ampersands and continuation tokens away from Windows az.cmd parsing.
+            $parameters | ConvertTo-Json | Set-Content -LiteralPath $queryPath -Encoding utf8NoBOM
+            $page = Invoke-CyotAz rest --method get --url $endpoint --url-parameters "@$queryPath" `
+                --subscription $Inputs.SubscriptionId --output json | ConvertFrom-Json -AsHashtable
+            if ($page -isnot [Collections.IDictionary] -or $page['value'] -isnot [Array]) {
+                throw 'Azure returned an invalid Elastic Premium region response.'
+            }
+            if (@($page['value'] | Where-Object {
+                $_ -and $_['name'] -is [string] -and ($_['name'] -replace '[^a-zA-Z0-9]', '') -ieq $Inputs.Location
+            }).Count) { return }
+            if (-not $page['nextLink']) { throw "Linux Premium EP1 is unavailable in '$($Inputs.Location)'." }
+            $next = $null
+            if (-not [Uri]::TryCreate([string]$page['nextLink'], [UriKind]::Absolute, [ref]$next) -or
+                $next.Scheme -ne 'https' -or $next.Port -ne 443 -or $next.UserInfo -or $next.Fragment -or
+                $next.GetLeftPart([UriPartial]::Path) -ine $endpoint -or -not $seen.Add($next.AbsoluteUri)) {
+                throw 'Azure returned an invalid or repeated Elastic Premium region continuation link.'
+            }
+            $parameters = @{} + $required
+            foreach ($pair in $next.Query.TrimStart('?').Split('&', [StringSplitOptions]::RemoveEmptyEntries)) {
+                $parts = $pair.Split('=', 2)
+                if ($parts.Count -ne 2) { throw 'Azure returned an invalid region continuation parameter.' }
+                $name = [Uri]::UnescapeDataString($parts[0].Replace('+', ' '))
+                $value = [Uri]::UnescapeDataString($parts[1].Replace('+', ' '))
+                if ($required.ContainsKey($name) -and $required[$name] -cne $value) {
+                    throw 'Azure region pagination changed the approved Elastic Premium/Linux filter.'
+                }
+                $parameters[$name] = $value
+            }
+        }
+        throw 'Azure region pagination exceeded the supported page limit.'
+    }
+    finally {
+        if (Test-Path -LiteralPath $queryPath) { Remove-Item -LiteralPath $queryPath -Force }
+    }
+}
+
+function Test-CyotRegistrationDelay {
+    param([string] $Message)
+
+    if ($Message -notmatch '\b(MissingSubscriptionRegistration|SubscriptionNotRegistered)\b') { return $false }
+    foreach ($provider in Get-CyotResourceProviderRequirements) {
+        if ($Message -match ('(?<![A-Za-z0-9_.])' + [regex]::Escape($provider.Namespace) + '(?![A-Za-z0-9_.])')) { return $true }
+    }
+    return $false
+}
+
+function Invoke-CyotRegistrationRetry {
+    param([scriptblock] $Operation, [ValidateRange(1, 60)][int] $MaxAttempts = 12)
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try { return & $Operation }
+        catch {
+            if ($attempt -eq $MaxAttempts -or -not (Test-CyotRegistrationDelay $_.Exception.Message)) { throw }
+            Write-Warning "Waiting for required Azure resource-provider registration to reach this region ($attempt/$MaxAttempts)."
+            Start-Sleep -Seconds 10
+        }
+    }
+}
+
+function Initialize-CyotResourceProviders {
+    param([hashtable] $Inputs, [ValidateRange(1, 120)][int] $MaxAttempts = 60)
+
+    $requested = @{}
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        $providers = @(Get-CyotResourceProviders -SubscriptionId $Inputs.SubscriptionId)
+        Assert-CyotProviderLocations -Providers $providers -Location $Inputs.Location
+        foreach ($provider in $providers) {
+            if ($provider.RegistrationState -eq 'NotRegistered' -and -not $requested.ContainsKey($provider.Namespace)) {
+                Write-Host "Registering Azure resource provider '$($provider.Namespace)' in subscription '$($Inputs.SubscriptionId)'..." -ForegroundColor Cyan
+                try {
+                    Invoke-CyotAz provider register --namespace $provider.Namespace --subscription $Inputs.SubscriptionId --output none | Out-Null
+                }
+                catch {
+                    throw [InvalidOperationException]::new(
+                        "Could not register '$($provider.Namespace)' in subscription '$($Inputs.SubscriptionId)'. Resource-provider /register/action permission is required at subscription scope; setup will not grant it. $($_.Exception.Message)",
+                        $_.Exception)
+                }
+                $requested[$provider.Namespace] = $true
+            }
+        }
+        # Azure registers region by region. Do not wait for global Registered when this region is usable.
+        $pending = @($providers | Where-Object {
+            $_.RegistrationState -eq 'NotRegistered' -or -not (Test-CyotProviderLocation $_ $Inputs.Location)
+        })
+        if (-not $pending.Count) {
+            Invoke-CyotRegistrationRetry -Operation { Assert-CyotPremiumLocation -Inputs $Inputs } | Out-Null
+            return
+        }
+        if ($attempt -eq $MaxAttempts) {
+            $states = $pending | ForEach-Object { "$($_.Namespace)=$($_.RegistrationState)" }
+            throw "Required Azure resource providers did not become available for '$($Inputs.Location)' after $MaxAttempts checks: $($states -join ', '). Registrations already requested are left in place; no deployment resources were created."
+        }
+        Write-Host "Waiting for Azure resource providers ($attempt/$MaxAttempts): $($pending.Namespace -join ', ')" -ForegroundColor DarkGray
+        Start-Sleep -Seconds 10
+    }
+}
+
 function Connect-CyotContext {
     param([hashtable] $Inputs, [Collections.IDictionary] $Names, [switch] $NonInteractive)
 
@@ -365,28 +523,20 @@ function Connect-CyotContext {
     }
     elseif ($groupExists -ne 'false') { throw 'Azure returned an invalid resource-group existence result.' }
 
-    foreach ($provider in @(
-        @{ Namespace = 'Microsoft.Web'; Type = 'sites' },
-        @{ Namespace = 'Microsoft.Storage'; Type = 'storageAccounts' },
-        @{ Namespace = 'Microsoft.KeyVault'; Type = 'vaults' },
-        @{ Namespace = 'Microsoft.OperationalInsights'; Type = 'workspaces' },
-        @{ Namespace = 'Microsoft.Insights'; Type = 'components' },
-        @{ Namespace = 'Microsoft.ManagedIdentity'; Type = 'userAssignedIdentities' }
-    )) {
-        $registration = Invoke-CyotAz provider show --namespace $provider.Namespace --subscription $Inputs.SubscriptionId --output json |
-            ConvertFrom-Json
-        if ($registration.registrationState -ne 'Registered') { throw "Register resource provider '$($provider.Namespace)' before setup." }
-        $locations = @($registration.resourceTypes | Where-Object resourceType -eq $provider.Type | ForEach-Object locations)
-        if (-not @($locations | Where-Object { ($_ -replace '[^a-zA-Z0-9]', '') -ieq $Inputs.Location }).Count) {
-            throw "'$($provider.Namespace)/$($provider.Type)' is unavailable in '$($Inputs.Location)'. Choose another location."
+    $resourceProviders = @(Get-CyotResourceProviders -SubscriptionId $Inputs.SubscriptionId)
+    Assert-CyotProviderLocations -Providers $resourceProviders -Location $Inputs.Location
+    $web = $resourceProviders | Where-Object Namespace -eq 'Microsoft.Web'
+    if ($web.RegistrationState -eq 'Registered') {
+        try { Assert-CyotPremiumLocation -Inputs $Inputs }
+        catch {
+            if (-not (Test-CyotRegistrationDelay $_.Exception.Message)) { throw }
+            Write-Warning 'Azure resource-provider registration is still reaching this region. Availability will be checked again after approval.'
         }
     }
-    $premiumLocations = Invoke-CyotAz appservice list-locations --sku EP1 --linux-workers-enabled `
-        --subscription $Inputs.SubscriptionId --query '[].name' --output json | ConvertFrom-Json
-    if (-not @($premiumLocations | Where-Object { ($_ -replace '[^a-zA-Z0-9]', '') -ieq $Inputs.Location }).Count) {
-        throw "Linux Premium EP1 is unavailable in '$($Inputs.Location)'."
+    return [pscustomobject]@{
+        OperatorId = $operatorId; GraphAccount = $graph.Account; Application = $application; TokenVersion = $version
+        ResourceProviders = $resourceProviders
     }
-    return [pscustomobject]@{ OperatorId = $operatorId; GraphAccount = $graph.Account; Application = $application; TokenVersion = $version }
 }
 
 function Show-CyotPlan {
@@ -408,6 +558,9 @@ function Show-CyotPlan {
     Write-Host "Source:       $SourceBaseUri"
     $Names.GetEnumerator() | ForEach-Object { [pscustomobject]@{ Resource = $_.Key; Name = $_.Value } } |
         Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+    Write-Host 'Required Azure resource providers (subscription-wide; register only those missing after approval):'
+    $Context.ResourceProviders | Select-Object Namespace, RegistrationState | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+    Write-Host 'Registration and regional readiness are checked before certificate/resource creation. Existing or in-progress registrations are reused.'
     Write-Host 'Includes the private packages blob container, Function system identity, Easy Auth, and diagnostic settings.'
     Write-Host 'System identity: Storage Blob Data Owner, Queue/Table Data Contributor, Key Vault Secrets User, Monitoring Metrics Publisher.'
     Write-Host "Azure operator $($Context.OperatorId): Key Vault Secrets Officer and Storage Blob Data Contributor, scoped to these resources."
@@ -667,6 +820,7 @@ function Invoke-CyotDeployment {
     }
     # The single setup approval covers these planned writes, including SDK/certificate cmdlets.
     $ConfirmPreference = 'None'
+    Initialize-CyotResourceProviders -Inputs $Inputs
     New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
     $certificate = Get-CyotEncryptionCertificate -Inputs $Inputs -OutputDirectory $OutputDirectory
     $existingKeys = @($Context.Application.KeyCredentials | Where-Object {
@@ -696,9 +850,12 @@ function Invoke-CyotDeployment {
     @{ '$schema' = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#'; contentVersion = '1.0.0.0'; parameters = $parameters } |
         ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $parameterPath -Encoding utf8NoBOM
     Write-Host 'Deploying Bicep infrastructure...' -ForegroundColor Cyan
-    $outputs = Invoke-CyotAz deployment sub create --name "cyot-$($Inputs.ResourcePrefix)-$([Guid]::NewGuid().ToString('N').Substring(0, 8))" `
-        --subscription $Inputs.SubscriptionId --location $Inputs.Location --template-file (Join-Path $AssetDirectory 'infra/main.bicep') `
-        --parameters "@$parameterPath" --query properties.outputs --output json | ConvertFrom-Json
+    $deploymentName = "cyot-$($Inputs.ResourcePrefix)-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
+    $outputs = Invoke-CyotRegistrationRetry -Operation {
+        Invoke-CyotAz deployment sub create --name $deploymentName `
+            --subscription $Inputs.SubscriptionId --location $Inputs.Location --template-file (Join-Path $AssetDirectory 'infra/main.bicep') `
+            --parameters "@$parameterPath" --query properties.outputs --output json
+    } | ConvertFrom-Json
     foreach ($mapping in @{ functionAppName = 'functionApp'; storageAccountName = 'storageAccount'; keyVaultName = 'keyVault'; resourceGroupName = 'resourceGroup' }.GetEnumerator()) {
         if ($outputs.($mapping.Key).value -cne $Names[$mapping.Value]) { throw 'Bicep outputs do not match the approved resource names. Stop and inspect the deployment.' }
     }

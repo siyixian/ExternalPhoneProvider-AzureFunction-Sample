@@ -62,7 +62,9 @@ application federated credential.
   and create the scoped role assignments. Service-principal provisioning is not supported.
 - Application-management permission in the customer tenant and delegated Graph
   `Application.ReadWrite.All` for endpoint-specific application configuration.
-- The required resource providers registered and **Linux Premium EP1** available in the chosen region.
+- **Linux Premium EP1** available in the chosen region. Setup registers missing required Azure
+  resource providers automatically after the single approval. The Azure account needs the
+  providers' subscription-scoped `/register/action` permission (included in Contributor/Owner).
 - **.NET selection only:** install the .NET 8 SDK and allow NuGet access. Setup runs `dotnet publish`
   automatically for `linux-x64`, packages the publish output, and deploys it. No manual build step
   or upload is required. JavaScript and Python do not require this SDK.
@@ -125,8 +127,23 @@ The flow is:
    package verification/build, provider
    settings, scoped roles, certificate creation, and application configuration. Bicep receives these
    exact names; it does not independently calculate a different naming scheme.
+   The plan also lists the six required **Azure resource providers** and their registration states.
+   This is separate from the Telesign/Soprano provider selection.
 6. **Type `Yes` once to deploy.** `No` or Enter cancels without Azure changes. Invalid answers prompt
    again; individual resources do not request additional approvals.
+
+After approval, setup rechecks the selected subscription and registers only missing
+`Microsoft.Web`, `Microsoft.Storage`, `Microsoft.KeyVault`, `Microsoft.OperationalInsights`,
+`Microsoft.Insights`, and `Microsoft.ManagedIdentity` providers. Already registered providers are
+left alone; existing registrations in progress are reused. Registration and regional checks happen
+before certificate creation or Bicep deployment. The read-only preflight does not register anything.
+
+Azure registers providers region by region. Setup does not unnecessarily wait for a global
+`Registered` state when a provider is already `Registering` and exposes the requested region.
+Registration metadata is polled with a bounded limit, and recognized regional registration
+propagation errors are retried during capability checks/deployment. Permission failures and
+unsupported regions remain explicit errors. Registration is subscription-wide and isn't undone
+automatically if a later deployment step fails.
 
 Supply known values to shorten the prompts:
 

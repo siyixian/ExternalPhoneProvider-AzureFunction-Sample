@@ -159,6 +159,9 @@ function Invoke-FlowFixture {
         Trace = [Collections.Generic.List[string]]::new()
         Parameters = $null; Context = $null; ResolvedInputs = $null; Result = $null; Error = $null; Text = ''; SyncAttempts = 0
         Access = 'Disabled'; WrittenSettings = $null; Federation = $null
+        ProviderRegistrations = [Collections.Generic.List[string]]::new()
+        DeploymentNames = [Collections.Generic.List[string]]::new()
+        PremiumChecks = 0
         Certificate = $script:testCertificate
     }
     foreach ($answer in $Answers) { $scenario.Answers.Enqueue($answer) }
@@ -180,6 +183,20 @@ function Invoke-FlowFixture {
                 if ($script:Fixture.Fault -eq 'profile-download') { throw 'Simulated provider download failure.' }
                 $script:Fixture.ProfileJson | Set-Content -LiteralPath $OutFile -Encoding utf8NoBOM
             }
+            function script:Get-FixtureProviderState {
+                param([string] $Namespace)
+                if ($Namespace -eq 'Microsoft.Web') {
+                    if ($script:Fixture.Fault -eq 'provider-unregistering') { return 'Unregistering' }
+                    if ($script:Fixture.Fault -eq 'provider-registering') { return 'Registering' }
+                    if ($script:Fixture.Fault -in @('provider-missing', 'provider-denied', 'provider-stuck')) {
+                        if ($script:Fixture.Fault -ne 'provider-stuck' -and $script:Fixture.ProviderRegistrations.Contains($Namespace)) {
+                            return 'Registering'
+                        }
+                        return 'NotRegistered'
+                    }
+                }
+                return 'Registered'
+            }
             function script:Connect-CyotContext {
                 param($Inputs, $Names, [switch] $NonInteractive)
                 $script:Fixture.Trace.Add('preflight')
@@ -188,6 +205,13 @@ function Invoke-FlowFixture {
                 $context = [pscustomobject]@{
                     OperatorId = '66666666-6666-6666-6666-666666666666'; GraphAccount = 'operator@contoso.com'; TokenVersion = 1
                     Application = [pscustomobject]@{ Id = '77777777-7777-7777-7777-777777777777'; KeyCredentials = @() }
+                    ResourceProviders = @(Get-CyotResourceProviderRequirements | ForEach-Object {
+                        [pscustomobject]@{
+                            Namespace = $_.Namespace; Type = $_.Type
+                            RegistrationState = Get-FixtureProviderState $_.Namespace
+                            Locations = @('West US 2')
+                        }
+                    })
                 }
                 if ($script:Fixture.Fault -eq 'existing-key') {
                     $context.Application.KeyCredentials = @([pscustomobject]@{
@@ -246,7 +270,34 @@ function Invoke-FlowFixture {
                     if ($script:Fixture.Fault -eq 'build') { throw 'Simulated Bicep build failure.' }
                     return ''
                 }
+                if ($Arguments[0] -eq 'provider') {
+                    $subscription = $Arguments[([Array]::IndexOf($Arguments, '--subscription') + 1)]
+                    if ($subscription -ne $script:Fixture.ResolvedInputs.SubscriptionId) { throw 'Provider operation used the wrong subscription.' }
+                    $namespace = $Arguments[([Array]::IndexOf($Arguments, '--namespace') + 1)]
+                    if ($Arguments[1] -eq 'register') {
+                        $script:Fixture.ProviderRegistrations.Add($namespace)
+                        $script:Fixture.Trace.Add("register:$namespace")
+                        if ($script:Fixture.Fault -eq 'provider-denied') { throw 'AuthorizationFailed: provider registration denied.' }
+                        return ''
+                    }
+                    if ($Arguments[1] -eq 'show') {
+                        return @{
+                            registrationState = Get-FixtureProviderState $namespace
+                            resourceTypes = @(Get-CyotResourceProviderRequirements | ForEach-Object {
+                                @{ resourceType = $_.Type; locations = @('West US 2') }
+                            })
+                        } | ConvertTo-Json -Depth 5
+                    }
+                    throw 'Unexpected resource-provider operation.'
+                }
+                if ($Arguments[0] -eq 'appservice') {
+                    throw 'Do not use appservice list-locations for the EP1 Functions SKU.'
+                }
                 if ($Arguments[0] -eq 'deployment') {
+                    $script:Fixture.DeploymentNames.Add($Arguments[([Array]::IndexOf($Arguments, '--name') + 1)])
+                    if ($script:Fixture.Fault -eq 'deployment-registration-delay' -and $script:Fixture.DeploymentNames.Count -lt 3) {
+                        throw "MissingSubscriptionRegistration: namespace 'Microsoft.Web' is still registering."
+                    }
                     if ($script:Fixture.Fault -eq 'deployment') { throw 'Simulated ARM failure.' }
                     $parameterFile = $Arguments[([Array]::IndexOf($Arguments, '--parameters') + 1)].Substring(1)
                     $script:Fixture.Parameters = (Read-CyotJson $parameterFile).parameters
@@ -266,6 +317,18 @@ function Invoke-FlowFixture {
                 }
                 if ($Arguments[0] -eq 'rest') {
                     $uri = $Arguments[([Array]::IndexOf($Arguments, '--url') + 1)]
+                    if ($uri -match '/providers/Microsoft\.Web/geoRegions$') {
+                        $script:Fixture.PremiumChecks++
+                        $queryFile = $Arguments[([Array]::IndexOf($Arguments, '--url-parameters') + 1)].Substring(1)
+                        $query = Read-CyotJson $queryFile
+                        if ($query.sku -cne 'ElasticPremium' -or $query.linuxWorkersEnabled -cne 'true' -or $query.'api-version' -cne '2024-04-01') {
+                            throw 'Incorrect Functions Premium region filter.'
+                        }
+                        if ($script:Fixture.Fault -eq 'provider-region-delay' -and $script:Fixture.PremiumChecks -lt 3) {
+                            throw "MissingSubscriptionRegistration: namespace 'Microsoft.Web' is still registering."
+                        }
+                        return '{"value":[{"name":"West US 2"}]}'
+                    }
                     if ($uri -match '/authsettingsV2\?') {
                         $inputs = $script:Fixture.ResolvedInputs
                         $names = $script:Fixture.Parameters.resourceNames.value
@@ -410,17 +473,32 @@ function Invoke-ContextFixture {
                             state = 'Enabled'; environmentName = 'AzureCloud'; user = @{ type = 'user' }
                         } | ConvertTo-Json
                     }
-                    'rest --method' { return '66666666-6666-6666-6666-666666666666' }
+                    'rest --method' {
+                        $uri = $Arguments[([Array]::IndexOf($Arguments, '--url') + 1)]
+                        if ($uri -match '/geoRegions$') {
+                            $script:ContextFixture.Calls.Add('geoRegions')
+                            return $(if ($script:ContextFixture.Fault -eq 'region') { '{"value":[]}' } else { '{"value":[{"name":"West US 2"}]}' })
+                        }
+                        return '66666666-6666-6666-6666-666666666666'
+                    }
                     'group exists' { return $(if ($script:ContextFixture.Fault -eq 'unowned-group') { 'true' } else { 'false' }) }
                     'group show' { return '{}' }
                     'provider show' {
                         return @{
-                            registrationState = $(if ($script:ContextFixture.Fault -eq 'unregistered') { 'NotRegistered' } else { 'Registered' })
-                            resourceTypes = @('sites', 'storageAccounts', 'vaults', 'workspaces', 'components', 'userAssignedIdentities') |
-                                ForEach-Object { @{ resourceType = $_; locations = @('West US 2') } }
+                            registrationState = $(switch ($script:ContextFixture.Fault) {
+                                'unregistered' { 'NotRegistered' }
+                                'registering' { 'Registering' }
+                                'unregistering' { 'Unregistering' }
+                                'unknown-provider-state' { 'UnknownState' }
+                                default { 'Registered' }
+                            })
+                            resourceTypes = $(if ($script:ContextFixture.Fault -eq 'unregistered') { @() } else {
+                                @('sites', 'storageAccounts', 'vaults', 'workspaces', 'components', 'userAssignedIdentities') |
+                                    ForEach-Object { @{ resourceType = $_; locations = @('West US 2') } }
+                            })
                         } | ConvertTo-Json -Depth 5
                     }
-                    'appservice list-locations' { return $(if ($script:ContextFixture.Fault -eq 'region') { '[]' } else { '["West US 2"]' }) }
+                    'appservice list-locations' { throw 'EP1 is not accepted by this CLI command.' }
                     default { throw "Unexpected operation during read-only preflight: $operation" }
                 }
             }
@@ -749,11 +827,18 @@ try {
         $ambiguous = Invoke-ContextFixture -Fault ambiguous-session -Interactive
         Assert-True ($ambiguous.Error -match 'ambiguous' -and $ambiguous.Reloads -eq 0 -and $ambiguous.Connections -eq 0) 'Recovery guessed a Graph module version.'
     }
-    foreach ($fault in @('tenant', 'scope', 'single-tenant', 'encrypted-token', 'assignment', 'unowned-group', 'unregistered', 'region')) {
+    foreach ($fault in @('tenant', 'scope', 'single-tenant', 'encrypted-token', 'assignment', 'unowned-group', 'unregistering', 'unknown-provider-state', 'region')) {
         Test-Case "Read-only preflight rejects $fault" {
             $run = Invoke-ContextFixture -Fault $fault
             Assert-True ($null -ne $run.Error -and $null -eq $run.Result) "Unsafe context was accepted: $fault"
             Assert-True ($run.Error -notmatch 'Unexpected operation|cannot be found') "Fixture failed for the wrong reason: $($run.Error)"
+        }
+    }
+    foreach ($state in @('unregistered', 'registering')) {
+        Test-Case "Preflight records $state resource providers without writes or early SKU checks" {
+            $run = Invoke-ContextFixture -Fault $state
+            Assert-True (-not $run.Error -and $run.Result.ResourceProviders.Count -eq 6) "Pending registration blocked preflight: $($run.Error)"
+            Assert-True ($run.Calls -notcontains 'provider register' -and $run.Calls -notcontains 'geoRegions') 'Preflight mutated registration or required a registered Web provider.'
         }
     }
     Test-Case 'Only missing inputs prompt, then one language, provider, prefix, and approval' {
@@ -796,7 +881,134 @@ try {
         Assert-True (($run.Trace -join "`n") -match '(?s)az:deployment sub create.*private-key.*application-endpoint.*az:rest --method get.*az:storage blob upload.*public:Enabled.*az:functionapp restart.*az:rest --method post.*az:functionapp function list') 'Authentication/publication ordering changed.'
         Assert-True ($run.Federation -eq $false) 'API-key samples should not create an unnecessary federated application credential.'
         Assert-True ($run.Result.policyChanged -eq $false) 'Setup changed policy.'
+        Assert-True ($run.ProviderRegistrations.Count -eq 0) 'Already registered providers were registered again.'
         Assert-True (@(Get-ChildItem $run.Inputs.OutputDirectory -Filter 'deployment-*.json').Count -eq 1) 'No persistent summary was written.'
+    }
+    Test-Case 'Missing Microsoft.Web is registered once after approval and before certificate/resource creation' {
+        $run = Invoke-FlowFixture -Fault provider-missing
+        Assert-True (-not $run.Error -and $null -ne $run.Result) "Automatic provider registration failed: $($run.Error)"
+        Assert-True ($run.ProviderRegistrations.Count -eq 1 -and $run.ProviderRegistrations[0] -eq 'Microsoft.Web') 'Registered unrelated providers or repeated registration.'
+        Assert-True (($run.Trace -join "`n") -match '(?s)prompt:Deploy.*register:Microsoft.Web.*certificate.*az:deployment sub create') 'Registration was outside the approved deployment phase.'
+        Assert-True ($run.Text -match 'subscription-wide' -and $run.Text -match 'NotRegistered') 'The registration change was not disclosed in the plan.'
+    }
+    Test-Case 'Declining or withholding approval performs no resource-provider registration' {
+        $declined = Invoke-FlowFixture -Fault provider-missing -Answers @('No')
+        Assert-True (-not $declined.Error -and $declined.ProviderRegistrations.Count -eq 0) 'Declining approval still registered a provider.'
+        $unapproved = Invoke-FlowFixture -Fault provider-missing -Overrides @{ NonInteractive = $true } -Answers @()
+        Assert-True ($unapproved.Error -match 'ApproveDeployment' -and $unapproved.ProviderRegistrations.Count -eq 0) 'Noninteractive mode silently registered a provider.'
+    }
+    Test-Case 'Already-registering providers do not block regional deployment or get re-registered' {
+        $run = Invoke-FlowFixture -Fault provider-registering
+        Assert-True (-not $run.Error -and $null -ne $run.Result -and $run.ProviderRegistrations.Count -eq 0) "In-progress registration was mishandled: $($run.Error)"
+    }
+    foreach ($fault in @('provider-denied', 'provider-stuck', 'provider-unregistering')) {
+        Test-Case "$fault stops before certificate or Azure resource creation" {
+            $run = Invoke-FlowFixture -Fault $fault
+            Assert-True ($null -ne $run.Error -and $null -eq $run.Result -and $run.Trace -notcontains 'certificate') 'Provider failure did not stop resource creation.'
+            Assert-True ($run.DeploymentNames.Count -eq 0 -and -not (Test-Path $run.Inputs.OutputDirectory)) 'Provider failure created deployment resources.'
+            if ($fault -eq 'provider-denied') { Assert-True ($run.Error -match 'AuthorizationFailed' -and $run.Error -match '/register/action') 'Registration permission failure lost its cause or required permission.' }
+            if ($fault -eq 'provider-stuck') { Assert-True ($run.Error -match '60 checks' -and $run.ProviderRegistrations.Count -eq 1) 'Registration did not have bounded polling/idempotent requests.' }
+        }
+    }
+    Test-Case 'Regional registration propagation is retried without another approval or registration' {
+        $run = Invoke-FlowFixture -Fault provider-region-delay
+        Assert-True (-not $run.Error -and $run.PremiumChecks -eq 3 -and $run.ProviderRegistrations.Count -eq 0) "Regional provider readiness failed: $($run.Error)"
+        $deployment = Invoke-FlowFixture -Fault deployment-registration-delay
+        Assert-True (-not $deployment.Error -and $deployment.DeploymentNames.Count -eq 3) "Regional deployment retry failed: $($deployment.Error)"
+        Assert-True (@($deployment.DeploymentNames | Select-Object -Unique).Count -eq 1) 'Registration retries changed deployment identity.'
+        Assert-True (@($deployment.Trace | Where-Object { $_ -like 'prompt:Deploy*' }).Count -eq 1) 'Registration retry prompted again.'
+    }
+    Test-Case 'Registration retries are bounded and reject unrelated errors or namespaces' {
+        $registrationTests = Import-Module $modulePath -Force -PassThru
+        try {
+            & $registrationTests {
+                $script:RegistrationAttempts = 0
+                function script:Start-Sleep { param($Seconds) }
+                try {
+                    Invoke-CyotRegistrationRetry -MaxAttempts 2 -Operation {
+                        $script:RegistrationAttempts++
+                        throw "MissingSubscriptionRegistration: namespace 'Microsoft.Web'."
+                    }
+                    throw 'Expected the registration retry limit.'
+                }
+                catch {
+                    if ($_.Exception.Message -notmatch 'MissingSubscriptionRegistration' -or $script:RegistrationAttempts -ne 2) { throw }
+                }
+                foreach ($message in @(
+                    "AuthorizationFailed: namespace 'Microsoft.Web'.",
+                    "MissingSubscriptionRegistration: namespace 'Microsoft.Compute'.",
+                    "MissingSubscriptionRegistration: namespace 'Microsoft.Web.Other'."
+                )) {
+                    if (Test-CyotRegistrationDelay $message) { throw "Unrelated error was considered registration propagation: $message" }
+                }
+            }
+        }
+        finally { Remove-Module -ModuleInfo $registrationTests }
+    }
+    Test-Case 'Elastic Premium region lookup uses the ARM tier/Linux filters and safe pagination' {
+        $regionTests = Import-Module $modulePath -Force -PassThru
+        $record = [pscustomobject]@{
+            Scenario = 'paged'; Calls = 0; QueryPath = $null
+            Queries = [Collections.Generic.List[object]]::new()
+        }
+        try {
+            & $regionTests {
+                param($record)
+                $script:RegionFixture = $record
+                function script:Invoke-CyotAz {
+                    param([Parameter(ValueFromRemainingArguments)][string[]] $Arguments)
+                    if ($Arguments[0] -ne 'rest') { throw 'Elastic Premium must not use the App Service CLI SKU enum.' }
+                    $endpoint = 'https://management.azure.com/subscriptions/22222222-2222-2222-2222-222222222222/providers/Microsoft.Web/geoRegions'
+                    if ($Arguments[([Array]::IndexOf($Arguments, '--url') + 1)] -cne $endpoint -or
+                        $Arguments[([Array]::IndexOf($Arguments, '--subscription') + 1)] -ne '22222222-2222-2222-2222-222222222222') {
+                        throw 'Region lookup changed its subscription or endpoint.'
+                    }
+                    $path = $Arguments[([Array]::IndexOf($Arguments, '--url-parameters') + 1)].Substring(1)
+                    $query = Read-CyotJson $path
+                    if ($query.sku -cne 'ElasticPremium' -or $query.linuxWorkersEnabled -cne 'true' -or $query.'api-version' -cne '2024-04-01') {
+                        throw 'Region lookup substituted another plan tier or lost Linux filtering.'
+                    }
+                    $script:RegionFixture.QueryPath = $path
+                    $script:RegionFixture.Queries.Add($query)
+                    $script:RegionFixture.Calls++
+                    $next = $endpoint + '?api-version=2024-04-01&sku=ElasticPremium&linuxWorkersEnabled=true&%24skipToken=next%26page%2Btoken'
+                    switch ($script:RegionFixture.Scenario) {
+                        'paged' {
+                            if ($script:RegionFixture.Calls -eq 1) {
+                                return @{ value = @(@{ name = 'East US' }); nextLink = $next } | ConvertTo-Json -Depth 4
+                            }
+                            return '{"value":[{"name":"West US 2"}]}'
+                        }
+                        'unavailable' { return '{"value":[]}' }
+                        'malformed' { return '{"value":null}' }
+                        'wrong-host' { return @{ value = @(); nextLink = 'https://untrusted.contoso.com/geoRegions' } | ConvertTo-Json }
+                        'wrong-filter' { return @{ value = @(); nextLink = ($endpoint + '?sku=Premium') } | ConvertTo-Json }
+                        'cycle' { return @{ value = @(); nextLink = $next } | ConvertTo-Json }
+                        default { throw 'Unknown region fixture.' }
+                    }
+                }
+                Assert-CyotPremiumLocation @{ SubscriptionId = '22222222-2222-2222-2222-222222222222'; Location = 'westus2' }
+            } $record
+            Assert-True ($record.Calls -eq 2 -and $record.Queries[1]['$skipToken'] -ceq 'next&page+token') 'Region pagination or query escaping failed.'
+            Assert-True (-not (Test-Path -LiteralPath $record.QueryPath)) 'Temporary region-query file was not removed.'
+            foreach ($case in @{
+                unavailable = 'Linux Premium EP1 is unavailable'
+                malformed = 'invalid Elastic Premium region response'
+                'wrong-host' = 'invalid or repeated'
+                'wrong-filter' = 'changed the approved'
+                cycle = 'invalid or repeated'
+            }.GetEnumerator()) {
+                $record.Scenario = $case.Key
+                $record.Calls = 0
+                Assert-Throws {
+                    & $regionTests { Assert-CyotPremiumLocation @{ SubscriptionId = '22222222-2222-2222-2222-222222222222'; Location = 'westus2' } }
+                } $case.Value
+                Assert-True (-not (Test-Path -LiteralPath $record.QueryPath)) 'A failed region lookup left its query file behind.'
+            }
+        }
+        finally { Remove-Module -ModuleInfo $regionTests }
+        $bicep = Get-Content (Join-Path $packageRoot 'infra/resources.bicep') -Raw
+        Assert-True ($bicep -match "name: 'EP1'" -and $bicep -match "tier: 'ElasticPremium'") 'The region fix changed the deployed hosting plan.'
     }
     Test-Case 'Transient Function cold start is retried with Easy Auth enforced' {
         $run = Invoke-FlowFixture -Fault cold-start

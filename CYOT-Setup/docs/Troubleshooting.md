@@ -1,5 +1,36 @@
 # Troubleshooting Step 2
 
+## appservice list-locations rejects EP1
+
+`EP1` is an Azure Functions Elastic Premium plan SKU, but older Azure CLI versions do not accept
+it in the `az appservice list-locations --sku` command. The current setup uses the subscription-scoped
+`Microsoft.Web/geoRegions` ARM API with `sku=ElasticPremium` and `linuxWorkersEnabled=true` instead.
+Query parameters are passed in a file to avoid Windows command-shell escaping problems.
+The actual deployment remains **EP1**; it is not changed to a Dedicated App Service Premium SKU.
+
+The accompanying 32-bit Python cryptography message is a performance warning, not the cause of
+the invalid-SKU error. Rerun with the updated test-branch helper; changing the SKU or installing
+another Python runtime is not required to fix this check.
+
+## A required Azure resource provider is not registered
+
+The current setup detects missing providers such as `Microsoft.Web` during read-only preflight
+and lists them in the resource plan instead of asking the customer to register them manually.
+After `Yes` (or explicit noninteractive approval), it registers only the six namespaces needed by
+this deployment in the supplied subscription. No registration occurs if approval is declined.
+
+Already registered providers are skipped. `Registering` is not a failure: Azure registers each
+region separately, so setup proceeds when the needed region is exposed and retries recognized
+registration-propagation errors. Metadata polling is limited to 60 checks with 10-second pauses;
+regional propagation retries are limited to 12 attempts. An actively `Unregistering` provider is
+not reversed automatically.
+
+If registration fails, inspect the original Azure CLI error. The account needs subscription-scoped
+resource-provider `/register/action` permission, generally included in Contributor or Owner.
+Setup cannot grant this permission or bypass a subscription policy. It stops before creating the
+certificate or deployment resources. Registrations already requested are left in place for a rerun;
+the script does not unregister services that other workloads might now use.
+
 ## Get-MgContext reports SessionNotInitialized
 
 This is different from simply not being signed in. A failed attempt to remove Graph Authentication
