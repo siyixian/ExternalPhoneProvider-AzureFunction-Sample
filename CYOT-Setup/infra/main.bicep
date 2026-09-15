@@ -1,39 +1,41 @@
 targetScope = 'subscription'
 
-@description('Resource group that contains the CYOT endpoint resources.')
-param resourceGroupName string = 'rg-external-phone-provider'
+@description('The exact resource names displayed in the approved setup plan.')
+param resourceNames object
 
-@description('Azure region for all CYOT endpoint resources.')
 param location string
-
-@minLength(2)
-@maxLength(12)
-@description('Short environment discriminator used in deterministic resource names.')
-param environmentName string = 'prod'
-
-param resourceTagName string = 'Purpose'
-param resourceTagValue string = 'Entra - External Phone Provider'
-
-@description('Object ID of the operator who may write the endpoint encryption secret.')
+param tenantId string
+param applicationId string
+param callerApplicationId string
 param deployerObjectId string
+param providerSettings object
+param packageBlobName string
+
+@allowed([1, 2])
+param tokenVersion int
 
 resource resourceGroup 'Microsoft.Resources/resourceGroups@2024-03-01' = {
-  name: resourceGroupName
+  name: resourceNames.resourceGroup
   location: location
   tags: {
-    '${resourceTagName}': resourceTagValue
+    managedBy: 'CYOT-Setup'
+    cyotApplicationId: applicationId
   }
 }
 
 module endpoint 'resources.bicep' = {
-  name: 'cyot-endpoint-${environmentName}'
+  name: 'cyot-endpoint'
   scope: resourceGroup
   params: {
+    resourceNames: resourceNames
     location: location
-    environmentName: environmentName
-    resourceTagName: resourceTagName
-    resourceTagValue: resourceTagValue
+    tenantId: tenantId
+    applicationId: applicationId
+    callerApplicationId: callerApplicationId
     deployerObjectId: deployerObjectId
+    tokenVersion: tokenVersion
+    providerSettings: providerSettings
+    packageBlobName: packageBlobName
   }
 }
 
@@ -41,3 +43,6 @@ output resourceGroupName string = resourceGroup.name
 output functionAppName string = endpoint.outputs.functionAppName
 output storageAccountName string = endpoint.outputs.storageAccountName
 output keyVaultName string = endpoint.outputs.keyVaultName
+output outboundPrincipalId string = endpoint.outputs.outboundPrincipalId
+output endpointUrl string = endpoint.outputs.endpointUrl
+output identifierUri string = endpoint.outputs.identifierUri

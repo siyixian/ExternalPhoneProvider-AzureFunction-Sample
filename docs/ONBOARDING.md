@@ -17,10 +17,16 @@ in code or app settings. Grant the Function's managed identity *Key Vault Secret
 appropriate secret or vault scope. Confirm that the endpoint and credentials belong to the same
 account and environment. Individual API contracts stay in the adapters.
 
-### Setup script compatibility
+### Guided setup compatibility
 
-The Preview 1 setup script creates the encryption-key secret, not the selected provider's API
-credentials. Before live delivery, complete these steps:
+The [CYOT Step 2 setup](../CYOT-Setup/docs/README.md) now uses one downloadable launcher, GitHub-hosted
+provider profiles, and one Bicep deployment approval. Application registration and policy activation
+are manual. That flow configures **Entra-based outbound authentication** and requires a compatible
+CYOT endpoint package. The API-key implementations documented here do not consume its Entra
+token-exchange settings and must not be substituted for that package.
+
+When deploying these API-key implementations separately, provision the encryption-key secret and
+the selected provider's API credentials. Before live delivery, complete these steps:
 
 1. Set `KEY_VAULT_URL` to the vault containing the provider credentials. When it is the vault created
 	by setup, use that vault's `vaultUri`; otherwise explicitly select the credential vault and grant
@@ -49,8 +55,8 @@ The script already writes the correct `EPP_` names; no variable-prefix translati
 | `EPP_ENCRYPTION_KEY_ID` | Advisory mismatch warning only; not overlapping-key selection. |
 | `EPP_EXPECTED_AUDIENCE`, `EPP_EXPECTED_ISSUER`, `EPP_EXPECTED_CLIENT_ID`, `EPP_TENANT_ID` | The script may write these, but this platform-authenticated application does not read them. The script's separate Easy Auth configuration enforces caller trust. |
 
-**Do not use the script's `-NoEasyAuth` option with this application.** There is no application token
-validator to take over. For the script's v1 registration, configure Easy Auth with the identifier URI
+**Do not disable Easy Auth with this application.** There is no application token
+validator to take over. For a v1 registration, configure Easy Auth with the identifier URI
 as audience, `https://sts.windows.net/{tenantId}/` as issuer, and the authorized SAS application in
 `allowedApplications`. Use the v2 audience/issuer only when the registration actually issues v2 tokens.
 No Entra application role check is performed. Azure RBAC grants to the Function's managed identity
@@ -66,10 +72,10 @@ The script alone does not make this implementation conform to every Preview 1 re
 - The guide requires voice digits to be spoken separately. This implementation preserves the supplied
   message; verify the selected voice API's behavior rather than assuming unspaced digits are intelligible.
 
-The pasted script also needs its advertised 100-byte UTF-8 endpoint-URL check before deployment.
-A public-only certificate cannot supply the private key it later exports. Treat failed infrastructure
-role assignments as failures unless the exact assignment is verified as already present. Verify these
-script prerequisites separately; the application tests do not validate provisioning.
+The guided deployment deliberately blocks incomplete provider profiles and does not derive a
+single provider base URL from different SMS and voice URLs. Its upstream profile/package owners
+must approve that mapping. Verify provisioning, package compatibility, and the deployed security
+checks separately; the application tests do not validate those control-plane operations.
 
 ## 2. Provision encryption and deployment trust
 

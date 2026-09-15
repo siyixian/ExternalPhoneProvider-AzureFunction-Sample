@@ -27,10 +27,12 @@ and deploying, step by step.
 
 ## Guided CYOT setup
 
-Use **[CYOT-Setup](CYOT-Setup/docs/README.md)** for a PowerShell-guided setup that registers the
-customer application, provisions or connects an External Phone Provider endpoint, validates the
-configuration, and activates the CYOT policy only after explicit approval. The setup supports Bicep
-or Azure CLI provisioning, redacted logs, diagnostics, and resumable stages.
+Use **[CYOT-Setup](CYOT-Setup/docs/README.md)** for **Step 2: endpoint deployment**. Download only
+`Setup-Cyot.ps1`; it downloads its supporting tools, Bicep, and provider JSON from GitHub. Supply
+missing customer settings, choose Telesign or Soprano, enter a resource prefix, and approve one
+complete resource plan. Application registration (Step 1) and policy activation (Step 3) are manual.
+Incomplete provider profiles block deployment; the Entra-based CYOT deployment requires a compatible
+endpoint package, not the API-key Function ZIPs described below.
 
 ## Download a Function ZIP
 
