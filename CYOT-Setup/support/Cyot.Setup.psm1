@@ -281,6 +281,12 @@ function Invoke-CyotDataOperation {
     }
 }
 
+function Import-CyotGraphModules {
+    # The SDK and its sign-in context belong to the session, not this temporary helper module.
+    Import-Module Microsoft.Graph.Authentication -Global -ErrorAction Stop
+    Import-Module Microsoft.Graph.Applications -Global -ErrorAction Stop
+}
+
 function Connect-CyotContext {
     param([hashtable] $Inputs, [Collections.IDictionary] $Names, [switch] $NonInteractive)
 
@@ -293,8 +299,7 @@ function Connect-CyotContext {
             throw 'Azure CLI 2.48.1 or newer is required for deployment with SCM basic authentication disabled.'
         }
     }
-    Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
-    Import-Module Microsoft.Graph.Applications -ErrorAction Stop
+    Import-CyotGraphModules
     $account = Invoke-CyotAz account show --subscription $Inputs.SubscriptionId --output json | ConvertFrom-Json
     if ($account.id -ne $Inputs.SubscriptionId -or $account.tenantId -ne $Inputs.TenantId -or
         $account.state -ne 'Enabled' -or $account.environmentName -ne 'AzureCloud' -or $account.user.type -ne 'user') {

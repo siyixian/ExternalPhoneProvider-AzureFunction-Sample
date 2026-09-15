@@ -93,16 +93,25 @@ function Invoke-LauncherFixture {
             $scenario.Downloads.Add([pscustomobject]@{ Uri = $Uri; Path = $OutFile })
             if ($scenario.Fault -eq 'download' -and $scenario.Downloads.Count -eq 2) { throw 'Simulated download failure.' }
             if ($Uri.EndsWith('Cyot.Setup.psm1')) {
-                @'
+                $content = @'
 function Invoke-CyotSetup {
     param($AssetDirectory, $SourceBaseUri, $SourceRepository, $TenantId, $ResourcePrefix, $OutputDirectory)
     [pscustomobject]@{ Invoked = $true; Source = $SourceBaseUri; Repository = $SourceRepository; Tenant = $TenantId; Prefix = $ResourcePrefix }
 }
 Export-ModuleMember -Function Invoke-CyotSetup
-'@ | Set-Content -LiteralPath $OutFile -Encoding utf8NoBOM
+'@
+                if ($scenario.Fault -eq 'operation-and-cleanup') {
+                    $content = $content.Replace('[pscustomobject]@{ Invoked', "throw 'Simulated primary setup failure.'; [pscustomobject]@{ Invoked")
+                }
+                $content | Set-Content -LiteralPath $OutFile -Encoding utf8NoBOM
             }
             elseif ($scenario.Fault -eq 'empty') { [IO.File]::WriteAllText($OutFile, '') }
             else { '{}' | Set-Content -LiteralPath $OutFile -Encoding utf8NoBOM }
+        }
+        function Remove-Module {
+            param($ModuleInfo, $ErrorAction)
+            if ($scenario.Fault -in @('cleanup', 'operation-and-cleanup')) { throw 'Simulated helper cleanup failure.' }
+            Microsoft.PowerShell.Core\Remove-Module -ModuleInfo $ModuleInfo -ErrorAction Stop
         }
         Push-Location $scenario.Directory
         try {
@@ -110,7 +119,12 @@ Export-ModuleMember -Function Invoke-CyotSetup
                 -SourceRepository $scenario.SourceRepository -TenantId '11111111-1111-1111-1111-111111111111' -ResourcePrefix contoso
         }
         catch { $scenario.Error = $_.Exception.Message }
-        finally { Pop-Location }
+        finally {
+            Pop-Location
+            $paths = @($scenario.Downloads | ForEach-Object Path)
+            $remaining = @(Get-Module -All | Where-Object { $paths -contains $_.Path })
+            if ($remaining.Count) { Microsoft.PowerShell.Core\Remove-Module -ModuleInfo $remaining -ErrorAction Stop }
+        }
     } $scenario
     return $scenario
 }
@@ -322,7 +336,7 @@ function Invoke-ContextFixture {
             param($scenario)
             $script:ContextFixture = $scenario
             function script:Get-Command { param($Name, $ErrorAction) return [pscustomobject]@{ Name = $Name } }
-            function script:Import-Module { param($Name, $ErrorAction) }
+            function script:Import-Module { param($Name, $ErrorAction, [switch] $Global) }
             function script:Get-MgContext {
                 return [pscustomobject]@{
                     TenantId = '11111111-1111-1111-1111-111111111111'
@@ -434,6 +448,21 @@ try {
             Assert-True ($null -ne $run.Error -and $null -eq $run.Result) 'Partial tools were executed.'
             Assert-True (@($run.Downloads | Where-Object { Test-Path -LiteralPath $_.Path }).Count -eq 0) 'Failure left downloaded files behind.'
         }
+    }
+    Test-Case 'Cleanup failure preserves the original setup error and still deletes downloads' {
+        $run = Invoke-LauncherFixture -Fault operation-and-cleanup
+        Assert-True ($run.Error -eq 'Simulated primary setup failure.') "Cleanup replaced the primary error: $($run.Error)"
+        Assert-True (@($run.Downloads | Where-Object { Test-Path -LiteralPath $_.Path }).Count -eq 0) 'Module cleanup failure skipped file cleanup.'
+    }
+    Test-Case 'Cleanup failure is a warning rather than a false deployment failure' {
+        $run = Invoke-LauncherFixture -Fault cleanup
+        Assert-True (-not $run.Error -and $run.Result.Invoked) "Successful setup was replaced by a cleanup failure: $($run.Error)"
+        Assert-True (@($run.Downloads | Where-Object { Test-Path -LiteralPath $_.Path }).Count -eq 0) 'Temporary downloads survived a cleanup warning.'
+    }
+    Test-Case 'Session-global Graph dependencies survive helper unload and rerun' {
+        $path = Join-Path $PSScriptRoot 'ModuleLifecycle.Tests.ps1'
+        $output = & (Get-Command pwsh -ErrorAction Stop).Source -NoProfile -File $path -ModulePath $modulePath 2>&1 | Out-String
+        Assert-True ($LASTEXITCODE -eq 0 -and $output -match 'survived both helper unloads') $output
     }
 
     $module = Import-Module $modulePath -Force -PassThru

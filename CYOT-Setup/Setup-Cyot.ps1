@@ -65,8 +65,18 @@ try {
     Invoke-CyotSetup @arguments -AssetDirectory $downloadDirectory -SourceBaseUri $sourceBaseUri
 }
 finally {
-    if ($module) { Remove-Module -ModuleInfo $module }
-    if (Test-Path -LiteralPath $downloadDirectory) {
-        Remove-Item -LiteralPath $downloadDirectory -Recurse -Force
+    try {
+        if ($module) { Remove-Module -ModuleInfo $module -ErrorAction Stop }
+    }
+    catch {
+        Write-Warning "Could not unload the temporary CYOT helper: $($_.Exception.Message)" -WarningAction Continue
+    }
+    try {
+        if (Test-Path -LiteralPath $downloadDirectory) {
+            Remove-Item -LiteralPath $downloadDirectory -Recurse -Force -ErrorAction Stop
+        }
+    }
+    catch {
+        Write-Warning "Could not remove temporary downloads at '$downloadDirectory': $($_.Exception.Message)" -WarningAction Continue
     }
 }

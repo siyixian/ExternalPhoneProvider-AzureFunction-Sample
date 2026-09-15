@@ -1,5 +1,19 @@
 # Troubleshooting Step 2
 
+## Remove-Module says Graph Authentication is required by Graph Applications
+
+Older setup versions imported the Graph SDK inside the temporary CYOT module. Unloading that
+helper could then attempt to remove its Graph dependencies in the wrong order, producing this
+cleanup error. The current version imports both Graph modules into the PowerShell session's global
+scope and unloads only its temporary CYOT helper. Your Graph modules and sign-in context remain
+available for subsequent commands and reruns.
+
+Do not add `-Force` to remove the Graph SDK. Download the updated launcher and open a fresh
+PowerShell 7 window to discard module state left by the old version. Cleanup failures are now
+reported as warnings, temporary-file cleanup is attempted independently, and an earlier setup
+error is preserved. A cleanup error alone does not establish whether Azure deployment succeeded;
+review the original output and saved deployment summary.
+
 ## Setup still asks for PackageUrl or PackageSha256
 
 You are running an older launcher or source revision. Download `Setup-Cyot.ps1` again and supply
