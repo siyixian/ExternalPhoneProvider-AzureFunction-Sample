@@ -10,6 +10,9 @@ param callerApplicationId string
 param deployerObjectId string
 param providerSettings object
 param packageBlobName string
+@allowed(['javascript', 'dotnet', 'python'])
+param language string
+param remoteBuild bool
 
 @allowed([1, 2])
 param tokenVersion int
@@ -20,6 +23,7 @@ resource resourceGroup 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   tags: {
     managedBy: 'CYOT-Setup'
     cyotApplicationId: applicationId
+    cyotLanguage: language
   }
 }
 
@@ -36,6 +40,8 @@ module endpoint 'resources.bicep' = {
     tokenVersion: tokenVersion
     providerSettings: providerSettings
     packageBlobName: packageBlobName
+    language: language
+    remoteBuild: remoteBuild
   }
 }
 
@@ -46,3 +52,4 @@ output keyVaultName string = endpoint.outputs.keyVaultName
 output outboundPrincipalId string = endpoint.outputs.outboundPrincipalId
 output endpointUrl string = endpoint.outputs.endpointUrl
 output identifierUri string = endpoint.outputs.identifierUri
+output packageContainerUrl string = endpoint.outputs.packageContainerUrl

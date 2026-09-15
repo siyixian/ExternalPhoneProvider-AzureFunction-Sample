@@ -1,88 +1,96 @@
 # Troubleshooting Step 2
 
-## A provider is not deployment-ready
+## Setup still asks for PackageUrl or PackageSha256
 
-This is an intentional preflight failure, not an invitation to guess values. Telesign's supplied
-manifest has blank API application IDs and no confirmed endpoint-package deployment mapping.
-Soprano's settings have not been supplied. The provider owner must complete and enable the JSON
-profile upstream. The publisher tenant is not assumed to be the provider API token tenant, and
-distinct SMS/voice URLs are not collapsed into an invented base URL.
+You are running an older launcher or source revision. Download `Setup-Cyot.ps1` again and supply
+the intended `-SourceRepository` and `-SourceRef`. The current version asks for **one language**
+and reads its package URL and published checksum automatically. Remove old package URL/hash
+arguments from saved commands.
 
-Check [provider ownership](../providers/README.md). No Azure resources or application properties
-are changed when provider validation fails.
+## Provider settings are dummy values
 
-## GitHub downloads fail
+This is intentional for deployment testing. Both JSON profiles explicitly use
+`deployment.testConfiguration: true`. Zero GUIDs and `example.invalid` URLs are written into the
+actual Function App environment, with `EPP_PROVIDER_TEST_CONFIGURATION=true`.
+Telesign's supplied channel URLs, timings, and publisher metadata are retained.
 
-Use a published `-SourceRef` in the configured `-SourceRepository` (upstream by default). For a
-personal public-fork branch, supply **both** options; downloading the launcher from a fork does not
-automatically change its default source. The launcher, supporting module, Bicep
-templates, catalog, and selected provider JSON must all exist at that revision. GitHub API rate
-limits, proxy/network restrictions, and unmerged changes can cause a download to fail.
-An incomplete download is never executed. A known full commit SHA avoids the branch-resolution
-API call. Do not bypass HTTPS or change execution policy globally to work around a download error.
+The script can deploy code with these values, but they cannot deliver real SMS/voice messages.
+Update the provider-owned profile and provision the adapter's credentials in Key Vault before
+live use. The API-key sample packages do not turn into outbound Entra-token clients merely because
+tenant/scope/app-ID values are present in settings. See [provider ownership](../providers/README.md).
 
-## A required input or prefix is invalid
+## A checksum or package download fails
 
-Interactive setup asks again for missing/invalid prompted input. An invalid explicitly supplied
-parameter fails rather than being silently replaced. Use the application **client** ID and the
-customer tenant/subscription GUIDs. The prefix must contain 2-10 lowercase letters/digits and start
-with a letter. Supply a different prefix if a globally unique resource name is unavailable.
+Each language entry points to a versioned GitHub ZIP and the same release's `SHA256SUMS.txt`.
+The file must contain exactly one valid entry for that asset. Missing, duplicate, malformed, or
+mismatched checksums fail closed; there is no manual-hash or skip-verification workaround.
+Verify the catalog's links and your access to GitHub/release assets.
 
-## Authentication or prerequisites fail
+Supporting tools, Bicep, catalogs, and provider JSON all come from the commit selected at startup.
+For a public-fork branch, pass both source options. A full commit SHA avoids branch-resolution
+API rate limits. Private repositories are not supported by these unauthenticated raw downloads.
 
-Use PowerShell 7 on Windows, Azure CLI with Bicep, and both documented Graph modules.
-Sign Azure CLI into the customer tenant with a user account, then rerun. The script pins ARM
-operations to the supplied subscription and rejects tenant mismatches, disabled subscriptions,
-nonpublic clouds, and service-principal provisioning. It does not change your default subscription.
+## .NET build fails
 
-For noninteractive Graph operations, connect in the same PowerShell process with delegated
-`Application.ReadWrite.All`. The endpoint application and enterprise application must already exist;
-complete manual Step 1 rather than adding automated registration back to this workflow.
-If an authentication session expires after approval, setup fails instead of repeatedly reopening
-sign-in. Reauthenticate, then review a new plan.
+Install the **.NET 8 SDK** and allow NuGet access. Setup selects an installed 8.x SDK, extracts the
+verified source into its temporary workspace, runs a Linux-targeted Release publish, checks the
+publish output, and creates the ready ZIP. The source ZIP is not uploaded as runnable code.
+Build failures occur before Azure resource creation and include the `dotnet` failure output.
 
-## Package validation fails
+Do not manually replace the published source checksum with a hash of the build output. These
+represent different artifacts; setup computes the built artifact's hash itself.
 
-Use a versioned ZIP URL from this repository's GitHub Releases, or the selected public fork's
-releases, and the matching published SHA-256.
-The package needs `host.json`, `package.json`, and all production dependencies at their deployment
-paths. Local settings and key files are rejected. The current API-key preview packages are not
-substitutes for the Entra-authenticated CYOT endpoint package.
+## Python remote build fails
 
-The provider owner must approve how `EPP_PROVIDER_ENDPOINT` maps to both channel URLs and confirm
-that the package implements the Entra settings and timeout/retry contract. The script does not
-rewrite an adapter, flatten URLs, or infer delivery behavior from a successful ZIP upload.
+Use Azure CLI **2.48.1+** with a user account allowed to publish to the Function App and network
+access to its SCM endpoint. Setup enables `SCM_DO_BUILD_DURING_DEPLOYMENT` and `ENABLE_ORYX_BUILD`,
+without `WEBSITE_RUN_FROM_PACKAGE` during the build, and requests Azure remote build explicitly.
+It never installs Windows Python dependencies for the Linux app.
 
-## Confirmation was declined
+SCM basic authentication remains disabled. The CLI uses Microsoft Entra authentication. The built
+`site/wwwroot` snapshot must include the Python Functions dependency payload; an unbuilt source
+archive is rejected even when an upload command returned success. The built output is then stored
+in private Blob storage, and temporary remote-build settings are cleared.
 
-`No` or Enter exits before resource/certificate creation or application updates. Input collection,
-downloads, prerequisite checks, and read-only Azure/Graph checks may already have occurred.
-There is no partial deployment to resume in this case.
+If build, snapshot, publication, or startup fails after opening SCM ingress, setup attempts to
+disable public ingress again. An inability to close ingress is an explicit error requiring
+immediate administrator inspection. Do not bypass certificate errors or enable basic auth.
 
-## Deployment failed after Yes
+## Azure CLI warnings break JSON parsing
 
-Some resources may exist. Setup does not delete resources, recover/purge deleted vaults, undo
-application changes, or activate policy. Inspect the reported Azure/Graph error and the deployment
-in the named resource group. Use the same subscription, application ID, prefix, source revision,
-and package checksum when rerunning. The resource plan can be applied again; the certificate store
-and existing application credentials are used to avoid minting a new key on every run.
+The current helper separates stdout from stderr. Successful command JSON is parsed independently
+of SDK warnings, while stderr warnings are shown and nonzero exit codes still fail. Upgrade an
+older downloaded helper by refreshing the launcher/source revision.
 
-New storage/Key Vault data permissions can take time to propagate. Only recognized data-plane RBAC
-propagation errors are retried, for up to twelve attempts. Persistent authorization failures,
-wrong scopes, quota errors, and provider/region unavailability need administrator intervention.
-Transient gateway/unavailable errors while the Function host loads the package are also retried
-for at most twelve attempts, without reopening public ingress during the wait.
+## Authentication, permission, or runtime preflight fails
 
-The Function's public ingress stays disabled until the final enablement step. A failed rerun can
-therefore interrupt an existing test endpoint. After correcting the issue, rerun and repeat the
-deployed validation procedure before any manual policy activation. Do not use deletion of a
-resource group as rollback unless its exact inventory and ownership have been reviewed.
+Use PowerShell 7 on Windows, Azure CLI with Bicep, and the documented Graph modules. Sign into the
+customer tenant with a user account. ARM requests use the supplied subscription; setup does not
+change the CLI's default subscription or adopt unrelated resource groups.
 
-## Public endpoint is unauthorized or policy is unavailable
+The customer application and enterprise application must already exist from manual Step 1.
+Graph needs delegated `Application.ReadWrite.All` for endpoint URI/key configuration. Noninteractive
+runs must authenticate both clients first and supply `-ApproveDeployment` separately.
+Use a distinct resource prefix for each language; setup rejects changing a previously tagged
+app to another runtime with the same prefix.
 
-Check Easy Auth's trusted tenant, actual token version, audience, HTTPS requirement, and nonempty
-Microsoft caller allowlist. Do not disable Easy Auth or set `tokenEncryptionKeyId` on its app to
-make a test pass. Key Vault payload decryption and bearer-token authentication are different.
+## Deployment stops after approval
 
-CYOT policy is never changed by this script. Complete the manual contract check and activation
-procedure only after endpoint validation; if the supported Graph contract is unavailable, stop.
+Some resources can remain. No automatic deletion, vault purge/recovery, policy activation, or
+rollback occurs. Inspect the named Azure deployment and the reported error, then rerun with the
+same tenant, subscription, application, language, and prefix after correcting it.
+
+Recognized storage/Key Vault RBAC propagation errors are retried for at most twelve attempts.
+Transient Function startup errors also have bounded retries. A successful upload alone is not
+success: `SendOtp` must appear in Azure's function metadata. No success summary is written if
+publication or registration fails.
+
+## The endpoint returns 401 or live delivery fails
+
+Keep Easy Auth enabled. Check the trusted tenant, actual token version, audience, HTTPS requirement,
+and nonempty Microsoft caller allowlist. Keep `tokenEncryptionKeyId` null on the endpoint app;
+payload JWE encryption is separate from signed bearer-token validation.
+
+For live delivery, replace dummy endpoints and configure the provider's exact Key Vault secret
+names. Test with synthetic evaluation requests before live messages. CYOT policy remains a
+separate, administrator-approved manual operation; no setup code updates it.

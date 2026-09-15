@@ -7,10 +7,29 @@ param deployerObjectId string
 param tokenVersion int
 param providerSettings object
 param packageBlobName string
+param language string
+param remoteBuild bool
+
+var runtimes = {
+  javascript: {
+    worker: 'node'
+    stack: 'NODE|22'
+  }
+  dotnet: {
+    worker: 'dotnet-isolated'
+    stack: 'DOTNET-ISOLATED|8.0'
+  }
+  python: {
+    worker: 'python'
+    stack: 'PYTHON|3.11'
+  }
+}
+var runtime = runtimes[language]
 
 var tags = {
   managedBy: 'CYOT-Setup'
   cyotApplicationId: applicationId
+  cyotLanguage: language
 }
 var blobDataOwnerRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')
 var blobDataContributorRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
@@ -133,14 +152,14 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
   properties: {
     serverFarmId: plan.id
     httpsOnly: true
-    // The script opens ingress only after keys, application trust, and package publication succeed.
+    // The script verifies Easy Auth before opening ingress for publication or Python remote build.
     publicNetworkAccess: 'Disabled'
     siteConfig: {
       alwaysOn: true
       minimumElasticInstanceCount: 1
       ftpsState: 'Disabled'
       http20Enabled: true
-      linuxFxVersion: 'NODE|24'
+      linuxFxVersion: runtime.stack
       minTlsVersion: '1.2'
     }
   }
@@ -155,11 +174,9 @@ resource appSettings 'Microsoft.Web/sites/config@2024-04-01' = {
   name: 'appsettings'
   properties: union(providerSettings, {
     FUNCTIONS_EXTENSION_VERSION: '~4'
-    FUNCTIONS_WORKER_RUNTIME: 'node'
+    FUNCTIONS_WORKER_RUNTIME: runtime.worker
     AzureWebJobsStorage__accountName: storage.name
     AzureWebJobsStorage__credential: 'managedidentity'
-    WEBSITE_RUN_FROM_PACKAGE: '${storage.properties.primaryEndpoints.blob}${packages.name}/${packageBlobName}'
-    WEBSITE_RUN_FROM_PACKAGE_BLOB_MI_RESOURCE_ID: 'SystemAssigned'
     APPLICATIONINSIGHTS_CONNECTION_STRING: insights.properties.ConnectionString
     APPLICATIONINSIGHTS_AUTHENTICATION_STRING: 'Authorization=AAD'
     KEY_VAULT_URL: vault.properties.vaultUri
@@ -170,6 +187,14 @@ resource appSettings 'Microsoft.Web/sites/config@2024-04-01' = {
     EPP_EXPECTED_ISSUER: issuer
     EPP_EXPECTED_CLIENT_ID: callerApplicationId
     EPP_TENANT_ID: tenantId
+  }, remoteBuild ? {
+    SCM_DO_BUILD_DURING_DEPLOYMENT: 'true'
+    ENABLE_ORYX_BUILD: 'true'
+  } : {
+    WEBSITE_RUN_FROM_PACKAGE: '${storage.properties.primaryEndpoints.blob}${packages.name}/${packageBlobName}'
+    WEBSITE_RUN_FROM_PACKAGE_BLOB_MI_RESOURCE_ID: 'SystemAssigned'
+    SCM_DO_BUILD_DURING_DEPLOYMENT: 'false'
+    ENABLE_ORYX_BUILD: 'false'
   })
 }
 
@@ -307,3 +332,4 @@ output keyVaultName string = vault.name
 output outboundPrincipalId string = outboundIdentity.properties.principalId
 output endpointUrl string = 'https://${functionApp.properties.defaultHostName}/api/SendOtp'
 output identifierUri string = identifierUri
+output packageContainerUrl string = '${storage.properties.primaryEndpoints.blob}${packages.name}/'

@@ -23,8 +23,7 @@ param(
     [string] $Provider,
     [string] $ProviderAccountName,
     [string] $ResourcePrefix,
-    [string] $PackageUrl,
-    [string] $PackageSha256,
+    [string] $Language,
     [string] $OutputDirectory = (Join-Path $PSScriptRoot 'cyot-output'),
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$')]
     [string] $SourceRepository = 'Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample',
@@ -55,7 +54,7 @@ try {
     $sourceBaseUri = "https://raw.githubusercontent.com/$repository/$revision/CYOT-Setup"
     Write-Host "Downloading deployment tools from $repository at $revision"
 
-    foreach ($file in @('support/Cyot.Setup.psm1', 'providers/catalog.json', 'infra/main.bicep', 'infra/resources.bicep')) {
+    foreach ($file in @('support/Cyot.Setup.psm1', 'support/Cyot.Packages.ps1', 'providers/catalog.json', 'packages/catalog.json', 'infra/main.bicep', 'infra/resources.bicep')) {
         $destination = Join-Path $downloadDirectory $file
         New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
         Invoke-WebRequest -Uri "$sourceBaseUri/$file" -OutFile $destination -TimeoutSec 60 -MaximumRedirection 0

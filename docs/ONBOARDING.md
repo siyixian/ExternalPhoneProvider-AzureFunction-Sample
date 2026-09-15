@@ -19,11 +19,14 @@ account and environment. Individual API contracts stay in the adapters.
 
 ### Guided setup compatibility
 
-The [CYOT Step 2 setup](../CYOT-Setup/docs/README.md) now uses one downloadable launcher, GitHub-hosted
-provider profiles, and one Bicep deployment approval. Application registration and policy activation
-are manual. That flow configures **Entra-based outbound authentication** and requires a compatible
-CYOT endpoint package. The API-key implementations documented here do not consume its Entra
-token-exchange settings and must not be substituted for that package.
+The [CYOT Step 2 setup](../CYOT-Setup/docs/README.md) uses one downloadable launcher, GitHub-hosted
+language/provider catalogs, and one Bicep deployment approval. It downloads the selected language
+ZIP, verifies its published checksum automatically, builds .NET for Linux or requests Azure remote
+build for Python, and deploys the ready-to-run result. Application registration and policy activation
+are manual. The three published packages use the **API-key** implementations documented here.
+Provider tenant/scope/channel-app-ID settings can be stored for onboarding, but these samples do
+not consume them for outbound Entra authentication. No outbound application federation is created
+for these API-key packages.
 
 When deploying these API-key implementations separately, provision the encryption-key secret and
 the selected provider's API credentials. Before live delivery, complete these steps:
@@ -72,10 +75,12 @@ The script alone does not make this implementation conform to every Preview 1 re
 - The guide requires voice digits to be spoken separately. This implementation preserves the supplied
   message; verify the selected voice API's behavior rather than assuming unspaced digits are intelligible.
 
-The guided deployment deliberately blocks incomplete provider profiles and does not derive a
-single provider base URL from different SMS and voice URLs. Its upstream profile/package owners
-must approve that mapping. Verify provisioning, package compatibility, and the deployed security
-checks separately; the application tests do not validate those control-plane operations.
+The guided deployment includes explicitly labelled dummy provider values for configuration testing.
+These values are written into the actual Function App environment; they do not establish provider
+connectivity. It does not derive a real provider base URL from different SMS and voice URLs.
+Replace the test values with provider-approved adapter settings and provision the required Key Vault
+credentials before live delivery. Verify the deployed security checks separately; the application
+tests do not validate those control-plane operations.
 
 ## 2. Provision encryption and deployment trust
 

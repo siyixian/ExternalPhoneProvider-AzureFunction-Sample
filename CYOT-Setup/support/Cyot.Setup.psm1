@@ -2,6 +2,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $script:MicrosoftPhoneProviderAppId = '25ec60fa-f18d-41a4-b398-50044c90ce13'
+. (Join-Path $PSScriptRoot 'Cyot.Packages.ps1')
 
 function Read-CyotJson {
     param([string] $Path)
@@ -12,24 +13,47 @@ function Read-CyotJson {
 }
 
 function ConvertTo-CyotGuid {
-    param([string] $Value)
+    param([string] $Value, [switch] $AllowZero)
 
     $guid = [Guid]::Empty
-    if (-not [Guid]::TryParse($Value, [ref] $guid) -or $guid -eq [Guid]::Empty) {
+    if (-not [Guid]::TryParse($Value, [ref] $guid) -or (-not $AllowZero -and $guid -eq [Guid]::Empty)) {
         throw 'Use a nonempty GUID, not an application name or an all-zero placeholder.'
     }
     return $guid.ToString('D')
 }
 
 function Assert-CyotHttpsUrl {
-    param([string] $Value)
+    param([string] $Value, [switch] $AllowTestHost)
 
     $uri = $null
     if (-not [Uri]::TryCreate($Value, [UriKind]::Absolute, [ref] $uri) -or
         $uri.Scheme -ne 'https' -or $uri.Port -ne 443 -or $uri.IsLoopback -or
         $uri.HostNameType -ne [UriHostNameType]::Dns -or $uri.UserInfo -or $uri.Query -or $uri.Fragment -or
-        $uri.Host -notmatch '\.' -or $uri.Host -match '(?i)(^|\.)example\.(com|net|org)$') {
+        $uri.Host -notmatch '\.' -or
+        (-not $AllowTestHost -and $uri.Host -match '(?i)((^|\.)example\.(com|net|org)$|\.(invalid|test|example)$)')) {
         throw 'Use a public HTTPS hostname on port 443, without credentials, a query string, or placeholders.'
+    }
+}
+
+function Select-CyotOption {
+    param([object[]] $Entries, [string] $Name, [string] $Value, [switch] $NonInteractive)
+
+    $ids = @($Entries | ForEach-Object { $_['id'] })
+    if ($Value) {
+        $selected = $Entries | Where-Object { $_['id'] -ieq $Value -or $_['displayName'] -ieq $Value } | Select-Object -First 1
+        if (-not $selected) { throw "Unknown $Name '$Value'. Choose: $($ids -join ', ')." }
+        return $selected
+    }
+    if ($NonInteractive) { throw "-$Name is required. Choose: $($ids -join ', ')." }
+    Write-Host "`nChoose your $($Name.ToLowerInvariant()):" -ForegroundColor Cyan
+    for ($index = 0; $index -lt $Entries.Count; $index++) { Write-Host "  [$($index + 1)] $($Entries[$index]['displayName'])" }
+    while ($true) {
+        $answer = ([string](Read-Host "$Name number or name")).Trim()
+        $number = 0
+        if ([int]::TryParse($answer, [ref] $number) -and $number -ge 1 -and $number -le $Entries.Count) { return $Entries[$number - 1] }
+        $selected = $Entries | Where-Object { $_['id'] -ieq $answer -or $_['displayName'] -ieq $answer } | Select-Object -First 1
+        if ($selected) { return $selected }
+        Write-Warning "Choose one of the listed $($Name.ToLowerInvariant()) options."
     }
 }
 
@@ -109,29 +133,7 @@ function Get-CyotProvider {
         }
         $ids[$entry['id']] = $true
     }
-    $providerIds = @($entries | ForEach-Object { $_['id'] })
-
-    $selected = $null
-    if ($Provider) {
-        $selected = $entries | Where-Object { $_['id'] -eq $Provider } | Select-Object -First 1
-        if (-not $selected) { throw "Unknown provider '$Provider'. Choose: $($providerIds -join ', ')." }
-    }
-    else {
-        if ($NonInteractive) { throw "-Provider is required. Choose: $($providerIds -join ', ')." }
-        Write-Host "`nChoose your provider:" -ForegroundColor Cyan
-        for ($index = 0; $index -lt $entries.Count; $index++) {
-            Write-Host "  [$($index + 1)] $($entries[$index]['displayName'])"
-        }
-        while (-not $selected) {
-            $answer = ([string](Read-Host 'Provider number or name')).Trim()
-            $number = 0
-            if ([int]::TryParse($answer, [ref] $number) -and $number -ge 1 -and $number -le $entries.Count) {
-                $selected = $entries[$number - 1]
-            }
-            else { $selected = $entries | Where-Object { $_['id'] -eq $answer } | Select-Object -First 1 }
-            if (-not $selected) { Write-Warning 'Choose one of the listed providers.' }
-        }
-    }
+    $selected = Select-CyotOption -Entries $entries -Name Provider -Value $Provider -NonInteractive:$NonInteractive
 
     $path = Join-Path $AssetDirectory "providers/$($selected['file'])"
     Invoke-WebRequest -Uri "$SourceBaseUri/providers/$($selected['file'])" -OutFile $path -TimeoutSec 60 -MaximumRedirection 0
@@ -145,13 +147,17 @@ function ConvertTo-CyotProviderSettings {
     $issues = [Collections.Generic.List[string]]::new()
     $deployment = $Profile['deployment']
     if ($deployment -isnot [Collections.IDictionary]) { throw "Provider '$DisplayName' has no deployment configuration." }
+    $testConfiguration = $deployment['testConfiguration'] -eq $true
+    if ($deployment.Contains('testConfiguration') -and $deployment['testConfiguration'] -isnot [bool]) {
+        $issues.Add('deployment.testConfiguration must be a JSON Boolean')
+    }
     if ($deployment['enabled'] -isnot [bool] -or -not $deployment['enabled']) {
         $issues.Add('the provider owner has not enabled this profile')
     }
     if ($deployment['providerName'] -cne $Id) { $issues.Add('deployment.providerName must match the catalog ID') }
-    try { $null = ConvertTo-CyotGuid $deployment['providerTenantId'] }
+    try { $null = ConvertTo-CyotGuid $deployment['providerTenantId'] -AllowZero:$testConfiguration }
     catch { $issues.Add('deployment.providerTenantId must identify the confirmed provider API token tenant') }
-    try { Assert-CyotHttpsUrl $deployment['providerEndpoint'] }
+    try { Assert-CyotHttpsUrl $deployment['providerEndpoint'] -AllowTestHost:$testConfiguration }
     catch { $issues.Add('deployment.providerEndpoint must be the provider-approved endpoint/base URL for the deployed package') }
     $scope = [string]$deployment['providerScope']
     $resource = $scope -replace '/\.default$', ''
@@ -174,9 +180,9 @@ function ConvertTo-CyotProviderSettings {
     foreach ($channel in @('sms', 'voice')) {
         $endpoint = $metadata['endpoints'][$channel]
         if ($endpoint -isnot [Collections.IDictionary]) { $issues.Add("metadata.endpoints.$channel is missing"); continue }
-        try { Assert-CyotHttpsUrl $endpoint['url'] }
+        try { Assert-CyotHttpsUrl $endpoint['url'] -AllowTestHost:$testConfiguration }
         catch { $issues.Add("metadata.endpoints.$channel.url must be a public HTTPS endpoint") }
-        try { $applicationIds += ConvertTo-CyotGuid $endpoint['appId'] }
+        try { $applicationIds += ConvertTo-CyotGuid $endpoint['appId'] -AllowZero:$testConfiguration }
         catch { $issues.Add("metadata.endpoints.$channel.appId is missing or invalid") }
         $timeout = $endpoint['timeoutMilliseconds']
         $retry = $endpoint['retryIntervalSeconds']
@@ -201,14 +207,20 @@ function ConvertTo-CyotProviderSettings {
         Id = $Id
         DisplayName = $DisplayName
         Manifest = $Profile
+        IsTestConfiguration = $testConfiguration
         Settings = @{
             EPP_PROVIDER_NAME = $Id
             EPP_PROVIDER_ENDPOINT = [string]$deployment['providerEndpoint']
             EPP_PROVIDER_TIMEOUT_MS = [string]$timings[0].Timeout
             EPP_PROVIDER_RETRY_INTERVAL_MS = [string]([long]$timings[0].Retry * 1000)
-            EPP_PROVIDER_AUTH_MODE = 'ests'
-            EPP_PROVIDER_TENANT_ID = ConvertTo-CyotGuid $deployment['providerTenantId']
+            EPP_PROVIDER_AUTH_MODE = 'apiKey'
+            EPP_PROVIDER_TENANT_ID = ConvertTo-CyotGuid $deployment['providerTenantId'] -AllowZero:$testConfiguration
             EPP_PROVIDER_SCOPE = $scope
+            EPP_PROVIDER_SMS_ENDPOINT = [string]$metadata['endpoints']['sms']['url']
+            EPP_PROVIDER_VOICE_ENDPOINT = [string]$metadata['endpoints']['voice']['url']
+            EPP_PROVIDER_SMS_APP_ID = [string]$metadata['endpoints']['sms']['appId']
+            EPP_PROVIDER_VOICE_APP_ID = [string]$metadata['endpoints']['voice']['appId']
+            EPP_PROVIDER_TEST_CONFIGURATION = $testConfiguration.ToString().ToLowerInvariant()
         }
     }
 }
@@ -237,13 +249,23 @@ function Invoke-CyotAz {
     param([Parameter(ValueFromRemainingArguments)][string[]] $Arguments)
 
     $PSNativeCommandUseErrorActionPreference = $false
-    $output = & az @Arguments --only-show-errors 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        $message = ($output -join "`n") -replace '(?i)([?&](?:sig|token|code|client_secret|password)=)[^&\s]+', '$1[REDACTED]'
+    $errorPath = Join-Path ([IO.Path]::GetTempPath()) "cyot-az-$([Guid]::NewGuid().ToString('N')).stderr"
+    try {
+        $output = & az @Arguments --only-show-errors 2> $errorPath
+        $exitCode = $LASTEXITCODE
+        $errorText = if (Test-Path -LiteralPath $errorPath) { [string](Get-Content -LiteralPath $errorPath -Raw) } else { '' }
+        $message = (($output -join "`n") + "`n" + $errorText) -replace '(?i)([?&](?:sig|token|code|client_secret|password)=)[^&\s]+', '$1[REDACTED]'
         $message = $message -replace '(?i)(Bearer\s+)[^\s,;]+', '$1[REDACTED]'
-        throw "Azure CLI operation '$($Arguments[0]) $($Arguments[1])' failed (exit $LASTEXITCODE): $message"
+        if ($exitCode -ne 0) {
+            throw "Azure CLI operation '$($Arguments[0]) $($Arguments[1])' failed (exit $exitCode): $message"
+        }
+        if (-not [string]::IsNullOrWhiteSpace($errorText)) {
+            $warning = $errorText -replace '(?i)([?&](?:sig|token|code|client_secret|password)=)[^&\s]+', '$1[REDACTED]'
+            Write-Warning ($warning -replace '(?i)(Bearer\s+)[^\s,;]+', '$1[REDACTED]')
+        }
+        return $output -join "`n"
     }
-    return $output -join "`n"
+    finally { if (Test-Path -LiteralPath $errorPath) { Remove-Item -LiteralPath $errorPath -Force } }
 }
 
 function Invoke-CyotDataOperation {
@@ -265,6 +287,10 @@ function Connect-CyotContext {
     foreach ($command in @('az', 'New-SelfSignedCertificate', 'Export-Certificate')) {
         if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
             throw "Missing prerequisite '$command'. Use PowerShell 7 on Windows with Azure CLI; see the setup prerequisites."
+        }
+        $cliVersion = Invoke-CyotAz version --output json | ConvertFrom-Json
+        if ([Version]$cliVersion.'azure-cli' -lt [Version]'2.48.1') {
+            throw 'Azure CLI 2.48.1 or newer is required for deployment with SCM basic authentication disabled.'
         }
     }
     Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
@@ -308,6 +334,9 @@ function Connect-CyotContext {
         if (-not $tags -or $tags['cyotApplicationId'] -ne $Inputs.ApplicationId -or $tags['managedBy'] -ne 'CYOT-Setup') {
             throw "Resource group '$($Names.resourceGroup)' is not owned by this CYOT application. Choose another prefix; existing resources will not be adopted."
         }
+        if ($tags['cyotLanguage'] -and $tags['cyotLanguage'] -ne $Inputs.Language) {
+            throw "This prefix already hosts '$($tags['cyotLanguage'])'. Use a different prefix for '$($Inputs.Language)' instead of switching a running app's runtime."
+        }
     }
     elseif ($groupExists -ne 'false') { throw 'Azure returned an invalid resource-group existence result.' }
 
@@ -335,32 +364,6 @@ function Connect-CyotContext {
     return [pscustomobject]@{ OperatorId = $operatorId; GraphAccount = $graph.Account; Application = $application; TokenVersion = $version }
 }
 
-function Get-CyotPackage {
-    param([string] $Url, [string] $Sha256, [string] $Directory)
-
-    $path = Join-Path $Directory 'endpoint.zip'
-    Invoke-WebRequest -Uri $Url -OutFile $path -TimeoutSec 300
-    if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ine $Sha256) {
-        throw 'The downloaded Function package does not match PackageSha256. No Azure resources were changed.'
-    }
-    $archive = [IO.Compression.ZipFile]::OpenRead($path)
-    try {
-        $names = @($archive.Entries | ForEach-Object FullName)
-        if (@($names | Where-Object { $_ -ceq 'host.json' }).Count -ne 1 -or
-            @($names | Where-Object { $_ -ceq 'package.json' }).Count -ne 1) {
-            throw 'Supply a ready-to-run Node.js Function ZIP with host.json and package.json at its root.'
-        }
-        if (@($names | Where-Object { $_ -match '\\|(^|/)\.\.?(/|$)|^/|^[a-zA-Z]:' }).Count) {
-            throw 'The Function ZIP contains an absolute or traversing archive path.'
-        }
-        if (@($names | Where-Object { $_ -match '(?i)(^|/)(local\.settings[^/]*\.json|\.env(?:\.[^/]*)?|[^/]+\.(pfx|p12|pem|key))$' }).Count) {
-            throw 'The Function ZIP contains local settings or key material. Do not deploy this package.'
-        }
-    }
-    finally { $archive.Dispose() }
-    return $path
-}
-
 function Show-CyotPlan {
     param([hashtable] $Inputs, [Collections.IDictionary] $Names, $ProviderConfiguration, $Context, [string] $SourceBaseUri)
 
@@ -369,25 +372,36 @@ function Show-CyotPlan {
     Write-Host "Subscription: $($Inputs.SubscriptionId)"
     Write-Host "Application:  $($Inputs.ApplicationId)"
     Write-Host "Location:     $($Inputs.Location)"
+    Write-Host "Language:     $($Inputs.Language) ($($Inputs.BuildStrategy))"
     Write-Host "Provider:     $($ProviderConfiguration.DisplayName)"
     Write-Host "API endpoint: $($ProviderConfiguration.Settings.EPP_PROVIDER_ENDPOINT)"
     Write-Host "Provider API: $($ProviderConfiguration.Settings.EPP_PROVIDER_TENANT_ID) / $($ProviderConfiguration.Settings.EPP_PROVIDER_SCOPE)"
     Write-Host "Timeout:      $($ProviderConfiguration.Settings.EPP_PROVIDER_TIMEOUT_MS) ms"
     Write-Host "Retry:        $($ProviderConfiguration.Settings.EPP_PROVIDER_RETRY_INTERVAL_MS) ms (package-dependent; not a retry guarantee)"
     Write-Host "Package:      $($Inputs.PackageUrl)"
-    Write-Host "SHA-256:      $($Inputs.PackageSha256)"
+    Write-Host "Source hash:  $($Inputs.SourcePackageSha256) (verified automatically)"
     Write-Host "Source:       $SourceBaseUri"
     $Names.GetEnumerator() | ForEach-Object { [pscustomobject]@{ Resource = $_.Key; Name = $_.Value } } |
         Format-Table -AutoSize | Out-String -Width 200 | Write-Host
     Write-Host 'Includes the private packages blob container, Function system identity, Easy Auth, and diagnostic settings.'
     Write-Host 'System identity: Storage Blob Data Owner, Queue/Table Data Contributor, Key Vault Secrets User, Monitoring Metrics Publisher.'
     Write-Host "Azure operator $($Context.OperatorId): Key Vault Secrets Officer and Storage Blob Data Contributor, scoped to these resources."
-    Write-Host "Graph operator $($Context.GraphAccount): append the endpoint identifier URI, publish a public encryption certificate,"
-    Write-Host 'and add an outbound managed-identity federated credential to the EXISTING application.'
+    Write-Host "Graph operator $($Context.GraphAccount): append the endpoint identifier URI and publish a public encryption certificate."
+    if ($Inputs.ProviderAuthentication -eq 'ests') {
+        Write-Host 'Add an outbound managed-identity federated credential to the EXISTING application.'
+    }
+    else { Write-Host 'The selected API-key sample does not use outbound Entra federation; no federated application credential is created.' }
     Write-Host "Create/reuse an RSA certificate in CurrentUser\My; store its private key as phone-provider-decryption-key in the new vault."
     Write-Host 'Deploy the verified package, synchronize triggers, and enable HTTPS ingress guarded by Easy Auth.'
     Write-Host 'Premium EP1, storage, and telemetry incur charges. Reruns can restart the Function. No automatic rollback or deletion.' -ForegroundColor Yellow
     Write-Host 'This does NOT register an application, grant provider API roles, or activate/change CYOT policy.' -ForegroundColor Yellow
+    if ($Inputs.BuildStrategy -eq 'remote-build') {
+        Write-Host 'Python: enable the Entra-protected SCM endpoint, run Azure remote build, then save only the built output to private package storage.'
+    }
+    if ($ProviderConfiguration.IsTestConfiguration) {
+        Write-Host 'TEST CONFIGURATION: dummy provider values WILL be written to the actual Function App environment settings.' -ForegroundColor Yellow
+        Write-Host 'Zero GUIDs and example.invalid URLs are placeholders, not working provider credentials or endpoints.' -ForegroundColor Yellow
+    }
 }
 
 function Confirm-CyotDeployment {
@@ -456,7 +470,7 @@ function Set-CyotPrivateKey {
 }
 
 function Set-CyotApplicationEndpoint {
-    param([hashtable] $Inputs, $Context, $Outputs, $Certificate, [string] $KeyId)
+    param([hashtable] $Inputs, $Context, $Outputs, $Certificate, [string] $KeyId, [bool] $ConfigureFederation = $true)
 
     $application = Get-MgApplication -ApplicationId $Context.Application.Id `
         -Property Id, AppId, SignInAudience, IdentifierUris, KeyCredentials, TokenEncryptionKeyId -ErrorAction Stop
@@ -479,6 +493,7 @@ function Set-CyotApplicationEndpoint {
     if (-not @($keys | Where-Object { $_.KeyId -eq $KeyId }).Count) { $keys += $key }
     # Do not set tokenEncryptionKeyId: JWE payload encryption is separate from bearer-token encryption.
     Update-MgApplication -ApplicationId $application.Id -IdentifierUris $uris -KeyCredentials $keys -ErrorAction Stop
+    if (-not $ConfigureFederation) { return }
 
     $issuer = "https://login.microsoftonline.com/$($Inputs.TenantId)/v2.0"
     $audience = 'api://AzureADTokenExchange'
@@ -496,6 +511,96 @@ function Set-CyotApplicationEndpoint {
     }
 }
 
+function Assert-CyotAuthentication {
+    param([string] $SiteId, [hashtable] $Inputs, $Context, [string] $IdentifierUri)
+
+    $auth = Invoke-CyotAz rest --method get --url "https://management.azure.com$SiteId/config/authsettingsV2?api-version=2024-04-01" `
+        --subscription $Inputs.SubscriptionId --output json | ConvertFrom-Json -AsHashtable
+    $properties = $auth['properties']
+    if ($properties -isnot [Collections.IDictionary]) { throw 'Easy Auth readback is missing. Ingress will not be opened.' }
+    foreach ($name in @('platform', 'globalValidation', 'httpSettings', 'identityProviders')) {
+        if ($properties[$name] -isnot [Collections.IDictionary]) { throw 'Easy Auth readback is incomplete. Ingress will not be opened.' }
+    }
+    $aad = $properties['identityProviders']['azureActiveDirectory']
+    if ($aad -isnot [Collections.IDictionary] -or $aad['registration'] -isnot [Collections.IDictionary] -or
+        $aad['validation'] -isnot [Collections.IDictionary] -or
+        $aad['validation']['defaultAuthorizationPolicy'] -isnot [Collections.IDictionary]) {
+        throw 'The Entra identity provider is incomplete. Ingress will not be opened.'
+    }
+    $expectedIssuer = if ($Context.TokenVersion -eq 2) { "https://login.microsoftonline.com/$($Inputs.TenantId)/v2.0" } else { "https://sts.windows.net/$($Inputs.TenantId)/" }
+    $expectedAudience = if ($Context.TokenVersion -eq 2) { $Inputs.ApplicationId } else { $IdentifierUri }
+    $callers = @($aad['validation']['defaultAuthorizationPolicy']['allowedApplications'])
+    $audiences = @($aad['validation']['allowedAudiences'])
+    if (-not $properties['platform']['enabled'] -or -not $properties['globalValidation']['requireAuthentication'] -or
+        $properties['globalValidation']['unauthenticatedClientAction'] -ne 'Return401' -or
+        @($properties['globalValidation']['excludedPaths'] | Where-Object { $_ }).Count -ne 0 -or
+        -not $properties['httpSettings']['requireHttps'] -or -not $aad['enabled'] -or
+        $aad['registration']['clientId'] -ne $Inputs.ApplicationId -or $aad['registration']['openIdIssuer'] -cne $expectedIssuer -or
+        $callers.Count -ne 1 -or $callers[0] -ne $script:MicrosoftPhoneProviderAppId -or
+        $audiences.Count -ne 1 -or $audiences[0] -cne $expectedAudience) {
+        throw 'Easy Auth readback does not match the approved tenant, audience, and caller restrictions. Ingress will not be opened.'
+    }
+}
+
+function Set-CyotPublicAccess {
+    param([string] $SiteId, [string] $SubscriptionId, [ValidateSet('Enabled', 'Disabled')][string] $Access)
+
+    Invoke-CyotAz resource update --ids $SiteId --api-version 2024-04-01 --set "properties.publicNetworkAccess=$Access" `
+        --subscription $SubscriptionId --output none | Out-Null
+}
+
+function Set-CyotPackageSettings {
+    param([string] $SiteId, [string] $SubscriptionId, [string] $PackageUrl, [string] $Directory)
+
+    $current = Invoke-CyotAz rest --method post `
+        --url "https://management.azure.com$SiteId/config/appsettings/list?api-version=2024-04-01" `
+        --subscription $SubscriptionId --output json | ConvertFrom-Json -AsHashtable
+    if ($current['properties'] -isnot [Collections.IDictionary]) { throw 'Could not read existing Function App settings.' }
+    $settings = $current['properties']
+    $settings['WEBSITE_RUN_FROM_PACKAGE'] = $PackageUrl
+    $settings['WEBSITE_RUN_FROM_PACKAGE_BLOB_MI_RESOURCE_ID'] = 'SystemAssigned'
+    $settings['SCM_DO_BUILD_DURING_DEPLOYMENT'] = 'false'
+    $settings['ENABLE_ORYX_BUILD'] = 'false'
+    $settings.Remove('SCM_RUN_FROM_PACKAGE')
+    $path = Join-Path $Directory 'runtime-appsettings.json'
+    try {
+        @{ properties = $settings } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $path -Encoding utf8NoBOM
+        Invoke-CyotAz rest --method put --url "https://management.azure.com$SiteId/config/appsettings?api-version=2024-04-01" `
+            --body "@$path" --headers 'Content-Type=application/json' --subscription $SubscriptionId --output none | Out-Null
+    }
+    finally { if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force } }
+}
+
+function Build-CyotPythonPackage {
+    param([hashtable] $Inputs, [Collections.IDictionary] $Names, [string] $SiteId, [string] $SourcePath, [string] $Directory)
+
+    Write-Host 'Building Python and its Linux dependencies in Azure automatically...' -ForegroundColor Cyan
+    Invoke-CyotAz functionapp deployment source config-zip --resource-group $Names.resourceGroup --name $Names.functionApp `
+        --subscription $Inputs.SubscriptionId --src $SourcePath --build-remote true --timeout 1800 --output none | Out-Null
+    $site = Invoke-CyotAz rest --method get --url "https://management.azure.com$SiteId`?api-version=2024-04-01" `
+        --subscription $Inputs.SubscriptionId --output json | ConvertFrom-Json -AsHashtable
+    $hosts = @($site['properties']['enabledHostNames'] | Where-Object { $_ -match '^[a-zA-Z0-9-]+\.scm\.(?:[a-zA-Z0-9-]+\.)?azurewebsites\.net$' })
+    if ($hosts.Count -ne 1) { throw 'Azure did not return exactly one public-cloud SCM hostname for the Function App.' }
+    $token = $null
+    $secureToken = $null
+    $path = Join-Path $Directory 'python-ready.zip'
+    try {
+        $token = Invoke-CyotAz account get-access-token --subscription $Inputs.SubscriptionId `
+            --resource 'https://management.azure.com/' --query accessToken --output tsv
+        if ([string]::IsNullOrWhiteSpace($token)) { throw 'Azure CLI did not return an SCM access token.' }
+        $secureToken = ConvertTo-SecureString $token -AsPlainText -Force
+        Invoke-WebRequest -Uri "https://$($hosts[0])/api/zip/site/wwwroot/" -Authentication Bearer -Token $secureToken `
+            -OutFile $path -TimeoutSec 300 -MaximumRedirection 0
+    }
+    finally {
+        $token = $null
+        if ($secureToken) { $secureToken.Dispose() }
+    }
+    # The source ZIP must never become the persistent run-from-package artifact.
+    Assert-CyotArchive -Path $path -Language python -Kind ready
+    return $path
+}
+
 function Sync-CyotFunctionTriggers {
     param([string] $SiteId, [string] $SubscriptionId)
 
@@ -507,16 +612,28 @@ function Sync-CyotFunctionTriggers {
         }
         catch {
             if ($attempt -eq 12 -or $_.Exception.Message -notmatch 'BadGateway|ServiceUnavailable|GatewayTimeout') { throw }
-            Write-Warning "Waiting for the Function host to load the package ($attempt/12). Ingress remains disabled."
+            Write-Warning "Waiting for the Function host to load the package ($attempt/12). Easy Auth remains enforced."
             Start-Sleep -Seconds 10
         }
     }
 }
 
+function Assert-CyotFunctionPublished {
+    param([hashtable] $Inputs, [Collections.IDictionary] $Names)
+
+    for ($attempt = 1; $attempt -le 6; $attempt++) {
+        $functions = @(Invoke-CyotAz functionapp function list --resource-group $Names.resourceGroup --name $Names.functionApp `
+            --subscription $Inputs.SubscriptionId --output json | ConvertFrom-Json)
+        if (@($functions | Where-Object { $_ -and $_.name -match '(^|/)SendOtp$' }).Count -eq 1) { return }
+        if ($attempt -lt 6) { Start-Sleep -Seconds 10 }
+    }
+    throw 'The package was published but Azure did not register SendOtp. Inspect the Function runtime/build logs; deployment is not complete.'
+}
+
 function Invoke-CyotDeployment {
     param(
         [hashtable] $Inputs, [Collections.IDictionary] $Names, $ProviderConfiguration, $Context,
-        [string] $AssetDirectory, [string] $PackagePath, [string] $OutputDirectory, [string] $SourceBaseUri
+        [string] $AssetDirectory, $Package, [string] $OutputDirectory, [string] $SourceBaseUri
     )
 
     $graph = Get-MgContext
@@ -536,6 +653,7 @@ function Invoke-CyotDeployment {
     $settings = @{} + $ProviderConfiguration.Settings
     $settings.EPP_PROVIDER_ACCOUNT_NAME = $Inputs.ProviderAccountName
     $settings.EPP_ENCRYPTION_KEY_ID = $keyId
+    $settings.EPP_PROVIDER_AUTH_MODE = $Inputs.ProviderAuthentication
     $parameters = @{
         resourceNames = @{ value = $Names }
         location = @{ value = $Inputs.Location }
@@ -546,6 +664,8 @@ function Invoke-CyotDeployment {
         deployerObjectId = @{ value = $Context.OperatorId }
         providerSettings = @{ value = $settings }
         packageBlobName = @{ value = "$($Inputs.PackageSha256).zip" }
+        language = @{ value = $Inputs.Language }
+        remoteBuild = @{ value = [bool]$Package.RequiresRemoteBuild }
     }
     $parameterPath = Join-Path $AssetDirectory 'deployment.parameters.json'
     @{ '$schema' = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#'; contentVersion = '1.0.0.0'; parameters = $parameters } |
@@ -562,24 +682,57 @@ function Invoke-CyotDeployment {
     if ([Text.Encoding]::UTF8.GetByteCount($outputs.endpointUrl.value) -gt 100) { throw 'The deployed endpoint URL exceeds the CYOT 100-byte limit.' }
     Set-CyotPrivateKey -Certificate $certificate -KeyId $keyId -VaultName $Names.keyVault `
         -SubscriptionId $Inputs.SubscriptionId -Directory $AssetDirectory
-    Set-CyotApplicationEndpoint -Inputs $Inputs -Context $Context -Outputs $outputs -Certificate $certificate -KeyId $keyId
-    Write-Host 'Publishing the verified Function package...' -ForegroundColor Cyan
-    Invoke-CyotDataOperation {
-        Invoke-CyotAz storage blob upload --account-name $Names.storageAccount --container-name packages `
-            --name "$($Inputs.PackageSha256).zip" --file $PackagePath --auth-mode login --overwrite true `
-            --subscription $Inputs.SubscriptionId --output none
-    } | Out-Null
-    Invoke-CyotAz functionapp restart --resource-group $Names.resourceGroup --name $Names.functionApp `
-        --subscription $Inputs.SubscriptionId --output none | Out-Null
+    Set-CyotApplicationEndpoint -Inputs $Inputs -Context $Context -Outputs $outputs -Certificate $certificate -KeyId $keyId `
+        -ConfigureFederation:($Inputs.ProviderAuthentication -eq 'ests')
     $siteId = "/subscriptions/$($Inputs.SubscriptionId)/resourceGroups/$($Names.resourceGroup)/providers/Microsoft.Web/sites/$($Names.functionApp)"
-    Sync-CyotFunctionTriggers -SiteId $siteId -SubscriptionId $Inputs.SubscriptionId
-    Invoke-CyotAz resource update --ids $siteId --api-version 2024-04-01 --set properties.publicNetworkAccess=Enabled `
-        --subscription $Inputs.SubscriptionId --output none | Out-Null
+    $ingressOpened = $false
+    try {
+        Assert-CyotAuthentication -SiteId $siteId -Inputs $Inputs -Context $Context -IdentifierUri $outputs.identifierUri.value
+        $packagePath = $Package.Path
+        if ($Package.RequiresRemoteBuild) {
+            $ingressOpened = $true
+            Set-CyotPublicAccess -SiteId $siteId -SubscriptionId $Inputs.SubscriptionId -Access Enabled
+            $packagePath = Build-CyotPythonPackage -Inputs $Inputs -Names $Names -SiteId $siteId -SourcePath $Package.Path -Directory $AssetDirectory
+            $Inputs.PackageSha256 = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+        Write-Host 'Publishing the ready-to-run Function package...' -ForegroundColor Cyan
+        Invoke-CyotDataOperation {
+            Invoke-CyotAz storage blob upload --account-name $Names.storageAccount --container-name packages `
+                --name "$($Inputs.PackageSha256).zip" --file $packagePath --auth-mode login --overwrite true `
+                --subscription $Inputs.SubscriptionId --output none
+        } | Out-Null
+        if ($Package.RequiresRemoteBuild) {
+            if ($outputs.packageContainerUrl.value -cne "https://$($Names.storageAccount).blob.core.windows.net/packages/") {
+                throw 'Azure returned an unexpected package storage URL. The app will not mount it.'
+            }
+            $packageUrl = "$($outputs.packageContainerUrl.value)$($Inputs.PackageSha256).zip"
+            Assert-CyotHttpsUrl $packageUrl
+            Set-CyotPackageSettings -SiteId $siteId -SubscriptionId $Inputs.SubscriptionId -PackageUrl $packageUrl -Directory $AssetDirectory
+        }
+        if (-not $ingressOpened) {
+            $ingressOpened = $true
+            Set-CyotPublicAccess -SiteId $siteId -SubscriptionId $Inputs.SubscriptionId -Access Enabled
+        }
+        Invoke-CyotAz functionapp restart --resource-group $Names.resourceGroup --name $Names.functionApp `
+            --subscription $Inputs.SubscriptionId --output none | Out-Null
+        Sync-CyotFunctionTriggers -SiteId $siteId -SubscriptionId $Inputs.SubscriptionId
+        Assert-CyotFunctionPublished -Inputs $Inputs -Names $Names
+    }
+    catch {
+        $deploymentError = $_
+        if ($ingressOpened) {
+            try { Set-CyotPublicAccess -SiteId $siteId -SubscriptionId $Inputs.SubscriptionId -Access Disabled }
+            catch { throw [AggregateException]::new('Deployment failed and public ingress could not be disabled. Inspect the Function App immediately.', [Exception[]]@($deploymentError.Exception, $_.Exception)) }
+        }
+        throw $deploymentError
+    }
     $result = [ordered]@{
         tenantId = $Inputs.TenantId; subscriptionId = $Inputs.SubscriptionId; applicationId = $Inputs.ApplicationId
         provider = $ProviderConfiguration.Id; resourcePrefix = $Inputs.ResourcePrefix; resources = $Names
+        language = $Inputs.Language; testConfiguration = $ProviderConfiguration.IsTestConfiguration
         endpointUrl = $outputs.endpointUrl.value; identifierUri = $outputs.identifierUri.value
         encryptionKeyId = $keyId; certificateThumbprint = $certificate.Thumbprint
+        packageUrl = $Inputs.PackageUrl; sourcePackageSha256 = $Inputs.SourcePackageSha256
         packageSha256 = $Inputs.PackageSha256; source = $SourceBaseUri
         policyChanged = $false
     }
@@ -588,6 +741,9 @@ function Invoke-CyotDeployment {
     Write-Host "Endpoint deployed: $($outputs.endpointUrl.value)" -ForegroundColor Green
     Write-Host "Saved identifiers: $resultPath"
     Write-Host 'CYOT policy was not changed. Validate the endpoint, then complete manual Step 3.' -ForegroundColor Yellow
+    if ($ProviderConfiguration.IsTestConfiguration) {
+        Write-Warning 'The code and real app settings were deployed with DUMMY provider values. Replace them and provision the adapter-named Key Vault credentials before live SMS/voice delivery.'
+    }
     return [pscustomobject]$result
 }
 
@@ -596,7 +752,7 @@ function Invoke-CyotSetup {
     param(
         [string] $TenantId, [string] $SubscriptionId, [string] $ApplicationId, [string] $Location,
         [string] $Provider, [string] $ProviderAccountName, [string] $ResourcePrefix,
-        [string] $PackageUrl, [string] $PackageSha256,
+        [string] $Language,
         [string] $OutputDirectory, [string] $AssetDirectory, [string] $SourceBaseUri,
         [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$')]
         [string] $SourceRepository = 'Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample',
@@ -612,8 +768,11 @@ function Invoke-CyotSetup {
     }
     $inputs.Location = Read-CyotInput Location $Location -Kind Location -Hint 'Azure region, for example westus2' -NonInteractive:$NonInteractive
     $inputs.ProviderAccountName = Read-CyotInput ProviderAccountName $ProviderAccountName -Hint 'Your provider account/sender name, not a credential' -NonInteractive:$NonInteractive
-    $inputs.PackageUrl = Read-CyotInput PackageUrl $PackageUrl -Kind PackageUrl -Hint 'GitHub release ZIP for the Entra-authenticated CYOT endpoint package' -NonInteractive:$NonInteractive -SourceRepository $SourceRepository
-    $inputs.PackageSha256 = Read-CyotInput PackageSha256 $PackageSha256 -Kind Hash -Hint 'SHA-256 from the package release' -NonInteractive:$NonInteractive
+    $selection = Get-CyotLanguage -AssetDirectory $AssetDirectory -Language $Language -SourceRepository $SourceRepository -NonInteractive:$NonInteractive
+    $inputs.Language = $selection.Id
+    $inputs.PackageUrl = $selection.Url
+    $inputs.BuildStrategy = $selection.BuildStrategy
+    $inputs.ProviderAuthentication = $selection.Authentication
 
     $providerConfiguration = Get-CyotProvider -AssetDirectory $AssetDirectory -SourceBaseUri $SourceBaseUri -Provider $Provider `
         -NonInteractive:$NonInteractive -SourceRepository $SourceRepository
@@ -622,7 +781,9 @@ function Invoke-CyotSetup {
 
     Write-Host "`nChecking prerequisites and the selected Azure context (no resource changes)..." -ForegroundColor Cyan
     $context = Connect-CyotContext -Inputs $inputs -Names $names -NonInteractive:$NonInteractive
-    $packagePath = Get-CyotPackage -Url $inputs.PackageUrl -Sha256 $inputs.PackageSha256 -Directory $AssetDirectory
+    $package = Get-CyotPackage -Selection $selection -Directory $AssetDirectory
+    $inputs.PackageSha256 = $package.Sha256
+    $inputs.SourcePackageSha256 = $package.SourceSha256
     Invoke-CyotAz bicep build --file (Join-Path $AssetDirectory 'infra/main.bicep') `
         --outfile (Join-Path $AssetDirectory 'main.json') | Out-Null
     Show-CyotPlan -Inputs $inputs -Names $names -ProviderConfiguration $providerConfiguration -Context $context -SourceBaseUri $SourceBaseUri
@@ -632,7 +793,7 @@ function Invoke-CyotSetup {
     }
     try {
         Invoke-CyotDeployment -Inputs $inputs -Names $names -ProviderConfiguration $providerConfiguration -Context $context `
-            -AssetDirectory $AssetDirectory -PackagePath $packagePath -OutputDirectory $OutputDirectory -SourceBaseUri $SourceBaseUri
+            -AssetDirectory $AssetDirectory -Package $package -OutputDirectory $OutputDirectory -SourceBaseUri $SourceBaseUri
     }
     catch {
         Write-Warning 'Deployment did not complete. Previously created resources are left in place; no rollback or policy activation was attempted. Correct the reported failure and rerun with the same inputs and prefix.'

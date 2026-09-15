@@ -3,33 +3,43 @@
   "descriptor": {
     "name": "soprano-cyot",
     "displayName": "Soprano",
-    "version": "0.1.0"
+    "version": "0.1.0",
+    "description": "DUMMY provider configuration for testing deployment and environment settings.",
+    "category": "Telephony",
+    "previewState": "TestConfiguration"
   },
   "publisher": {
-    "tenantId": ""
+    "tenantId": "00000000-0000-0000-0000-000000000000"
   },
   "metadata": {
     "endpoints": {
       "sms": {
-        "url": "",
-        "appId": "",
-        "timeoutMilliseconds": null,
-        "retryIntervalSeconds": null
+        "url": "https://soprano.example.invalid/sms",
+        "appId": "00000000-0000-0000-0000-000000000000",
+        "timeoutMilliseconds": 1500,
+        "retryIntervalSeconds": 30
       },
       "voice": {
-        "url": "",
-        "appId": "",
-        "timeoutMilliseconds": null,
-        "retryIntervalSeconds": null
+        "url": "https://soprano.example.invalid/voice",
+        "appId": "00000000-0000-0000-0000-000000000000",
+        "timeoutMilliseconds": 1500,
+        "retryIntervalSeconds": 30
+      },
+      "certification": {
+        "url": "https://soprano.example.invalid/ping",
+        "appId": "00000000-0000-0000-0000-000000000000"
       }
     },
     "supportedChannels": ["sms", "voice"]
   },
   "deployment": {
-    "enabled": false,
+    "enabled": true,
+    "testConfiguration": true,
     "providerName": "soprano",
-    "providerTenantId": "",
-    "providerScope": "",
-    "providerEndpoint": ""
+    "providerTenantId": "00000000-0000-0000-0000-000000000000",
+    "providerScope": "api://00000000-0000-0000-0000-000000000000/.default",
+    "providerEndpoint": "https://soprano.example.invalid",
+    "placeholderFields": ["providerTenantId", "providerScope", "providerEndpoint", "metadata.endpoints"],
+    "note": "All Soprano endpoints, API IDs, and timing values are DUMMY test defaults. Replace them with provider-approved values and set testConfiguration to false before live delivery."
   }
 }

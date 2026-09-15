@@ -19,21 +19,21 @@
       "sms": {
         "url": "https://rest-ww.telesign.com/integration/microsoft-cyot/sms",
         "eudbUrl": "",
-        "appId": "",
+        "appId": "00000000-0000-0000-0000-000000000000",
         "timeoutMilliseconds": 1500,
         "retryIntervalSeconds": 30
       },
       "voice": {
         "url": "https://rest-ww.telesign.com/integration/microsoft-cyot/voice",
         "eudbUrl": "",
-        "appId": "",
+        "appId": "00000000-0000-0000-0000-000000000000",
         "timeoutMilliseconds": 1500,
         "retryIntervalSeconds": 30
       },
       "certification": {
         "url": "https://rest-ww.telesign.com/integration/microsoft-cyot/ping",
         "eudbUrl": "",
-        "appId": ""
+        "appId": "00000000-0000-0000-0000-000000000000"
       }
     },
     "supportedChannels": ["sms", "voice"],
@@ -74,10 +74,20 @@
     "documentationUrl": "https://support.telesign.com/url-tbd"
   },
   "deployment": {
-    "enabled": false,
+    "enabled": true,
+    "testConfiguration": true,
     "providerName": "telesign",
-    "providerTenantId": "",
-    "providerScope": "",
-    "providerEndpoint": ""
+    "providerTenantId": "00000000-0000-0000-0000-000000000000",
+    "providerScope": "api://00000000-0000-0000-0000-000000000000/.default",
+    "providerEndpoint": "https://telesign.example.invalid",
+    "placeholderFields": [
+      "providerTenantId",
+      "providerScope",
+      "providerEndpoint",
+      "metadata.endpoints.sms.appId",
+      "metadata.endpoints.voice.appId",
+      "metadata.endpoints.certification.appId"
+    ],
+    "note": "DUMMY test values are intentionally written to Function App settings. The supplied channel URLs and publisher tenant are preserved, but do not establish a working API-key base URL or API token audience."
   }
 }

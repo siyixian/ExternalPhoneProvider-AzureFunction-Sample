@@ -29,10 +29,13 @@ and deploying, step by step.
 
 Use **[CYOT-Setup](CYOT-Setup/docs/README.md)** for **Step 2: endpoint deployment**. Download only
 `Setup-Cyot.ps1`; it downloads its supporting tools, Bicep, and provider JSON from GitHub. Supply
-missing customer settings, choose Telesign or Soprano, enter a resource prefix, and approve one
-complete resource plan. Application registration (Step 1) and policy activation (Step 3) are manual.
-Incomplete provider profiles block deployment; the Entra-based CYOT deployment requires a compatible
-endpoint package, not the API-key Function ZIPs described below.
+missing customer settings, select **JavaScript, .NET, or Python**, choose Telesign or Soprano, enter a
+resource prefix, and approve one complete resource plan. Package links and published checksums are
+selected automatically. Setup publishes .NET for Linux and requests Azure remote build for Python;
+customers do not build or deploy the source ZIPs manually. The .NET choice requires the .NET 8 SDK.
+Application registration (Step 1) and policy activation (Step 3) remain manual. Missing provider
+details are explicitly labelled test values and written to the real Function App settings; replace
+them and provision provider credentials before live delivery.
 
 ## Download a Function ZIP
 
