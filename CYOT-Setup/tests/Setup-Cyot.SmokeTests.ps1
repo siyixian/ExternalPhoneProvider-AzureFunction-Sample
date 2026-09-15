@@ -327,22 +327,62 @@ function Invoke-FlowFixture {
 }
 
 function Invoke-ContextFixture {
-    param([string] $Fault)
+    param([string] $Fault, [switch] $Interactive)
 
-    $scenario = [pscustomobject]@{ Fault = $Fault; Result = $null; Error = $null; Calls = [Collections.Generic.List[string]]::new() }
+    $scenario = [pscustomobject]@{
+        Fault = $Fault; Interactive = [bool]$Interactive; Result = $null; Error = $null
+        Calls = [Collections.Generic.List[string]]::new()
+        ContextReads = 0; Reloads = 0; Connections = 0; Connected = $false
+    }
     $module = Import-Module $modulePath -Force -PassThru
     try {
         $scenario.Result = & $module {
             param($scenario)
             $script:ContextFixture = $scenario
             function script:Get-Command { param($Name, $ErrorAction) return [pscustomobject]@{ Name = $Name } }
-            function script:Import-Module { param($Name, $ErrorAction, [switch] $Global) }
+            function script:Get-Module {
+                param($Name)
+                if ($Name -ne 'Microsoft.Graph.Authentication') { throw 'Unexpected module lookup.' }
+                if ($script:ContextFixture.Fault -eq 'ambiguous-session') {
+                    return @([pscustomobject]@{ Version = [Version]'2.38.0' }, [pscustomobject]@{ Version = [Version]'2.39.0' })
+                }
+                return [pscustomobject]@{ Version = [Version]'2.39.0' }
+            }
+            function script:Import-Module {
+                param($Name, $ErrorAction, $RequiredVersion, [switch] $Global, [switch] $Force)
+                if ($Force) {
+                    if ($Name -ne 'Microsoft.Graph.Authentication' -or $RequiredVersion -ne [Version]'2.39.0' -or -not $Global) {
+                        throw 'SDK recovery changed module/version or import scope.'
+                    }
+                    $script:ContextFixture.Reloads++
+                }
+            }
             function script:Get-MgContext {
+                param($ErrorAction)
+                $script:ContextFixture.ContextReads++
+                if ($script:ContextFixture.Fault -eq 'sdk-error') { throw [InvalidOperationException]::new('Unrelated Graph SDK failure.') }
+                if ($script:ContextFixture.Fault -in @('persistent-session', 'ambiguous-session') -or
+                    ($script:ContextFixture.Fault -eq 'reset-session' -and $script:ContextFixture.ContextReads -eq 1)) {
+                    throw [InvalidOperationException]::new('SessionNotInitialized')
+                }
+                if ($script:ContextFixture.Fault -in @('reset-session', 'not-signed-in') -and -not $script:ContextFixture.Connected) {
+                    return $null
+                }
                 return [pscustomobject]@{
                     TenantId = '11111111-1111-1111-1111-111111111111'
                     Environment = 'Global'; AuthType = 'Delegated'; Account = 'operator@contoso.com'
                     Scopes = $(if ($script:ContextFixture.Fault -eq 'scope') { @() } else { @('Application.ReadWrite.All') })
                 }
+            }
+            function script:Connect-MgGraph {
+                param($TenantId, $Scopes, $ContextScope, [switch]$NoWelcome, $ErrorAction)
+                if (-not $script:ContextFixture.Interactive) { throw 'Noninteractive setup attempted a sign-in.' }
+                if ($TenantId -ne '11111111-1111-1111-1111-111111111111' -or
+                    $Scopes -ne 'Application.ReadWrite.All' -or $ContextScope -ne 'Process') {
+                    throw 'Graph sign-in changed its tenant or permission scope.'
+                }
+                $script:ContextFixture.Connections++
+                $script:ContextFixture.Connected = $true
             }
             function script:Get-MgApplication {
                 param($ApplicationId, $Property, $Filter, [switch] $All, $ErrorAction)
@@ -389,7 +429,7 @@ function Invoke-ContextFixture {
                 ApplicationId = '33333333-3333-3333-3333-333333333333'; Location = 'westus2'; Language = 'javascript'
             }
             $names = Get-CyotResourceNames $inputs.SubscriptionId $inputs.ApplicationId contoso
-            Connect-CyotContext -Inputs $inputs -Names $names -NonInteractive
+            Connect-CyotContext -Inputs $inputs -Names $names -NonInteractive:(-not $script:ContextFixture.Interactive)
         } $scenario
     }
     catch { $scenario.Error = $_.Exception.Message }
@@ -685,6 +725,29 @@ try {
         $run = Invoke-ContextFixture
         Assert-True (-not $run.Error -and $run.Result.TokenVersion -eq 1) "Context preflight failed: $($run.Error)"
         Assert-True ($run.Result.OperatorId -eq '66666666-6666-6666-6666-666666666666') 'Wrong scoped role principal.'
+        Assert-True ($run.Reloads -eq 0 -and $run.Connections -eq 0) 'A healthy Graph session was reset.'
+    }
+    Test-Case 'An uninitialized SDK is reloaded once before normal interactive sign-in' {
+        $run = Invoke-ContextFixture -Fault reset-session -Interactive
+        Assert-True (-not $run.Error -and $run.Reloads -eq 1 -and $run.Connections -eq 1) "SDK recovery failed: $($run.Error)"
+    }
+    Test-Case 'An initialized SDK without sign-in connects without reloading modules' {
+        $run = Invoke-ContextFixture -Fault not-signed-in -Interactive
+        Assert-True (-not $run.Error -and $run.Reloads -eq 0 -and $run.Connections -eq 1) "Normal sign-in failed: $($run.Error)"
+    }
+    Test-Case 'Noninteractive SDK recovery never initiates sign-in' {
+        $run = Invoke-ContextFixture -Fault reset-session
+        Assert-True ($run.Error -match 'Connect-MgGraph' -and $run.Reloads -eq 1 -and $run.Connections -eq 0) 'SDK recovery bypassed noninteractive sign-in requirements.'
+    }
+    Test-Case 'Unrelated SDK failures are not swallowed or retried' {
+        $run = Invoke-ContextFixture -Fault sdk-error -Interactive
+        Assert-True ($run.Error -eq 'Unrelated Graph SDK failure.' -and $run.Reloads -eq 0 -and $run.Connections -eq 0) 'An unrelated error was treated as an uninitialized session.'
+    }
+    Test-Case 'Persistent or ambiguous SDK state requires a fresh process without looping' {
+        $persistent = Invoke-ContextFixture -Fault persistent-session -Interactive
+        Assert-True ($persistent.Error -match 'pwsh -NoProfile' -and $persistent.Reloads -eq 1 -and $persistent.Connections -eq 0) 'Persistent initialization failure was not bounded.'
+        $ambiguous = Invoke-ContextFixture -Fault ambiguous-session -Interactive
+        Assert-True ($ambiguous.Error -match 'ambiguous' -and $ambiguous.Reloads -eq 0 -and $ambiguous.Connections -eq 0) 'Recovery guessed a Graph module version.'
     }
     foreach ($fault in @('tenant', 'scope', 'single-tenant', 'encrypted-token', 'assignment', 'unowned-group', 'unregistered', 'region')) {
         Test-Case "Read-only preflight rejects $fault" {

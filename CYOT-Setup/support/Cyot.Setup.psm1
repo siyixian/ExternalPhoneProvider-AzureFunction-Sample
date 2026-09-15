@@ -287,6 +287,26 @@ function Import-CyotGraphModules {
     Import-Module Microsoft.Graph.Applications -Global -ErrorAction Stop
 }
 
+function Get-CyotInitialGraphContext {
+    try { return Get-MgContext -ErrorAction Stop }
+    catch {
+        if ($_.Exception.GetBaseException().Message -cne 'SessionNotInitialized') { throw }
+    }
+
+    # Graph's failed OnRemove hook can reset its static session while leaving the module loaded.
+    $authentication = @(Get-Module -Name Microsoft.Graph.Authentication)
+    if ($authentication.Count -ne 1) {
+        throw 'The Graph SDK session is uninitialized and its loaded Authentication version is ambiguous. Run setup in a fresh PowerShell process with pwsh -NoProfile.'
+    }
+    Write-Warning 'An earlier module removal reset the Graph SDK session. Reloading its existing Authentication version once; sign-in may be required.'
+    Import-Module Microsoft.Graph.Authentication -RequiredVersion $authentication[0].Version -Global -Force -ErrorAction Stop
+    try { return Get-MgContext -ErrorAction Stop }
+    catch {
+        if ($_.Exception.GetBaseException().Message -cne 'SessionNotInitialized') { throw }
+        throw 'The Graph SDK session could not be reinitialized. Run setup in a fresh PowerShell process with pwsh -NoProfile; no Azure resources were changed.'
+    }
+}
+
 function Connect-CyotContext {
     param([hashtable] $Inputs, [Collections.IDictionary] $Names, [switch] $NonInteractive)
 
@@ -308,12 +328,12 @@ function Connect-CyotContext {
     $operatorId = Invoke-CyotAz rest --method get --url 'https://graph.microsoft.com/v1.0/me' `
         --subscription $Inputs.SubscriptionId --query id --output tsv
     $operatorId = ConvertTo-CyotGuid $operatorId
-    $graph = Get-MgContext
+    $graph = Get-CyotInitialGraphContext
     if (-not $graph -or $graph.TenantId -ne $Inputs.TenantId -or $graph.Environment -ne 'Global' -or
         $graph.AuthType -ne 'Delegated' -or $graph.Scopes -notcontains 'Application.ReadWrite.All') {
         if ($NonInteractive) { throw 'Connect-MgGraph to the customer tenant with Application.ReadWrite.All before noninteractive setup.' }
-        Connect-MgGraph -TenantId $Inputs.TenantId -Scopes 'Application.ReadWrite.All' -ContextScope Process -NoWelcome
-        $graph = Get-MgContext
+        Connect-MgGraph -TenantId $Inputs.TenantId -Scopes 'Application.ReadWrite.All' -ContextScope Process -NoWelcome -ErrorAction Stop
+        $graph = Get-MgContext -ErrorAction Stop
     }
     if (-not $graph -or $graph.TenantId -ne $Inputs.TenantId -or $graph.Environment -ne 'Global' -or
         $graph.AuthType -ne 'Delegated' -or $graph.Scopes -notcontains 'Application.ReadWrite.All') {

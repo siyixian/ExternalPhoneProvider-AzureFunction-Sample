@@ -1,5 +1,21 @@
 # Troubleshooting Step 2
 
+## Get-MgContext reports SessionNotInitialized
+
+This is different from simply not being signed in. A failed attempt to remove Graph Authentication
+can run the SDK's cleanup hook and clear its internal session even though Graph Applications keeps
+the module loaded. Reimporting an already loaded module normally does not initialize it again.
+See the upstream [Graph SDK issue](https://github.com/microsoftgraph/msgraph-sdk-powershell/issues/2457).
+
+Setup now detects this exact error during its initial context check, reloads the **same loaded
+Authentication version** once, and then uses the normal sign-in flow. It does not force-remove the
+SDK, upgrade modules, suppress unrelated errors, or automatically reconnect after deployment approval.
+A healthy existing Graph session is reused unchanged. Noninteractive runs still require prior sign-in.
+
+For immediate recovery, start a new process with `pwsh -NoProfile` and rerun the downloaded script.
+If initialization still fails after the one reload, setup gives this same clean-process instruction
+instead of repeatedly retrying or hiding the error.
+
 ## Remove-Module says Graph Authentication is required by Graph Applications
 
 Older setup versions imported the Graph SDK inside the temporary CYOT module. Unloading that
