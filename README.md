@@ -25,10 +25,10 @@ by default. Deploy each language separately, not all three to the same Function 
 New here? Start with **[docs/ONBOARDING.md](docs/ONBOARDING.md)** — setup, config, running, securing,
 and deploying, step by step.
 
-## Guided CYOT setup
+## Guided EPP setup
 
 Use **[setup](setup/docs/README.md)** for **Step 2: endpoint deployment**. Download only
-`Setup-Cyot.ps1`; it downloads its supporting tools, Bicep, and provider JSON from GitHub. Supply
+`Setup-Epp.ps1`; it downloads its supporting tools, Bicep, and provider JSON from GitHub. Supply
 missing customer settings, select **JavaScript, .NET, or Python**, choose Telesign or Soprano,
 **SMS or voice**, **Global or EU**, enter a resource prefix, and approve one complete resource plan.
 Generated names add `epp` after the customer prefix. Missing required Azure resource providers
@@ -56,7 +56,7 @@ project; Python requires remote build to install dependencies. Neither source ZI
 as a run-from-package artifact. GitHub's **Code > Download ZIP**
 is the whole source repository, not a Function deployment package.
 
-The private test links above match `test/cyot-single-script`. After the packaging workflow is merged
+The private test links above match `test/epp-single-script`. After the packaging workflow is merged
 upstream, each successful `main` build tests all three implementations,
 builds and inspects the ZIPs, and publishes a new versioned release. Get those builds from
 [Latest release](https://github.com/Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample/releases/latest).

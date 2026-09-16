@@ -59,10 +59,10 @@ def test_infobip_sms_request_and_response_contract():
 
 def test_telesign_sms_request_and_response_contract():
     request = TelesignProvider().build_request(
-        "sms", "https://telesign.example/cyot/sms", _dispatch(),
+        "sms", "https://telesign.example/epp/sms", _dispatch(),
         {"mode": "apiKey", "secret": "key", "identity": "customer"}, {},
     )
-    assert request["method"] == "POST" and request["url"] == "https://telesign.example/cyot/sms"
+    assert request["method"] == "POST" and request["url"] == "https://telesign.example/epp/sms"
     assert request["headers"]["Authorization"] == "Basic " + base64.b64encode(b"customer:key").decode()
     assert request["headers"]["Content-Type"] == "application/x-www-form-urlencoded"
     form = parse_qs(request["body"])

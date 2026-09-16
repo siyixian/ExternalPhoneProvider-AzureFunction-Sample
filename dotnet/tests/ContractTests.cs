@@ -66,10 +66,10 @@ public class ContractTests
         using var smsJson = JsonDocument.Parse(sms.Body);
         Assert.Equal(Request().Message, smsJson.RootElement.GetProperty("messages")[0].GetProperty("content").GetProperty("text").GetString());
 
-        var form = new TelesignProvider().BuildRequest("sms", "https://provider.example/cyot/sms", Request(), credential, env);
+        var form = new TelesignProvider().BuildRequest("sms", "https://provider.example/epp/sms", Request(), credential, env);
         Assert.Equal("Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes("test-id:test-key")), form.Headers["Authorization"]);
         Assert.Equal("application/x-www-form-urlencoded", form.Headers["Content-Type"]);
-        Assert.Equal("https://provider.example/cyot/sms", form.Url);
+        Assert.Equal("https://provider.example/epp/sms", form.Url);
         Assert.Contains("message=" + Uri.EscapeDataString(Request().Message!), form.Body);
 
         var call = new SinchProvider().BuildRequest("voice", "https://provider.example", Request("voice"), credential, env);

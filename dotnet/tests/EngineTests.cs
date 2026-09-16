@@ -80,7 +80,7 @@ public class EngineTests
     {
         using var rig = new HandlerRig();
         rig.Env["EPP_PROVIDER_NAME"] = "telesign";
-        rig.Env["EPP_PROVIDER_ENDPOINT"] = "https://provider.example/cyot/sms";
+        rig.Env["EPP_PROVIDER_ENDPOINT"] = "https://provider.example/epp/sms";
         rig.Secrets.Identity = "";
         AssertFailure(rig, await rig.Invoke(), 502);
         rig.Secrets.Identity = "private-api-id";

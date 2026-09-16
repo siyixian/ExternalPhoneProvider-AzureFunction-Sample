@@ -114,8 +114,8 @@ test('App-auth SMS preserves its request and normalizes acceptance', () => {
 });
 
 test('Basic-auth SMS preserves its form request and normalizes acceptance', () => {
-    const request = getProvider('telesign').adapter.buildRequest({ ...input, endpoint: 'https://provider.example/cyot/sms' });
-    assert.equal(request.url, 'https://provider.example/cyot/sms');
+    const request = getProvider('telesign').adapter.buildRequest({ ...input, endpoint: 'https://provider.example/epp/sms' });
+    assert.equal(request.url, 'https://provider.example/epp/sms');
     assert.equal(request.headers.Authorization, `Basic ${Buffer.from('id:key').toString('base64')}`);
     assert.equal(request.headers['Content-Type'], 'application/x-www-form-urlencoded');
     assert.equal(new URLSearchParams(request.body).get('message'), dispatch.message);

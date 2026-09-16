@@ -21,14 +21,14 @@ resource resourceGroup 'Microsoft.Resources/resourceGroups@2024-03-01' = {
   name: resourceNames.resourceGroup
   location: location
   tags: {
-    managedBy: 'CYOT-Setup'
-    cyotApplicationId: applicationId
-    cyotLanguage: language
+    managedBy: 'EPP-Setup'
+    eppApplicationId: applicationId
+    eppLanguage: language
   }
 }
 
 module endpoint 'resources.bicep' = {
-  name: 'cyot-endpoint'
+  name: 'epp-endpoint'
   scope: resourceGroup
   params: {
     resourceNames: resourceNames

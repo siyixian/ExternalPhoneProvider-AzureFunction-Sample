@@ -1,7 +1,7 @@
-function Get-CyotLanguage {
+function Get-EppLanguage {
     param([string] $AssetDirectory, [string] $Language, [string] $SourceRepository, [switch] $NonInteractive)
 
-    $catalog = Read-CyotJson (Join-Path $AssetDirectory 'packages/catalog.json')
+    $catalog = Read-EppJson (Join-Path $AssetDirectory 'packages/catalog.json')
     if ($catalog['schemaVersion'] -ne 1 -or -not $catalog['packages']) { throw 'Unsupported or empty language package catalog.' }
     $strategies = @{ javascript = 'ready'; dotnet = 'dotnet-publish'; python = 'remote-build' }
     $seen = @{}
@@ -13,21 +13,21 @@ function Get-CyotLanguage {
             throw 'Language catalog contains an invalid, unsupported, or duplicate entry.'
         }
         $seen[$entry['id']] = $true
-        $null = Read-CyotInput -Name PackageUrl -Value $entry['url'] -Kind PackageUrl -SourceRepository $SourceRepository -NonInteractive
+        $null = Read-EppInput -Name PackageUrl -Value $entry['url'] -Kind PackageUrl -SourceRepository $SourceRepository -NonInteractive
         $url = [Uri]$entry['url']
         if ($url.Segments[-1] -cnotmatch '^[A-Za-z0-9][A-Za-z0-9_.-]*\.zip$' -or
             $entry['checksumsUrl'] -cne ($entry['url'].Substring(0, $entry['url'].LastIndexOf('/') + 1) + 'SHA256SUMS.txt')) {
             throw 'Each package needs an unambiguous ZIP filename and SHA256SUMS.txt in the same GitHub release.'
         }
     }
-    $entry = Select-CyotOption -Entries $entries -Name Language -Value $Language -NonInteractive:$NonInteractive
+    $entry = Select-EppOption -Entries $entries -Name Language -Value $Language -NonInteractive:$NonInteractive
     return [pscustomobject]@{
         Id = $entry['id']; DisplayName = $entry['displayName']; Url = $entry['url']; ChecksumsUrl = $entry['checksumsUrl']
         BuildStrategy = $entry['buildStrategy']
     }
 }
 
-function Get-CyotPublishedChecksum {
+function Get-EppPublishedChecksum {
     param([string] $Text, [string] $FileName)
 
     $matches = @()
@@ -41,7 +41,7 @@ function Get-CyotPublishedChecksum {
     return $matches[0]
 }
 
-function Assert-CyotArchive {
+function Assert-EppArchive {
     param(
         [string] $Path,
         [ValidateSet('javascript', 'dotnet', 'python')][string] $Language,
@@ -93,7 +93,7 @@ function Assert-CyotArchive {
     finally { $archive.Dispose() }
 }
 
-function Invoke-CyotDotNet {
+function Invoke-EppDotNet {
     param([Parameter(ValueFromRemainingArguments)][string[]] $Arguments)
 
     $PSNativeCommandUseErrorActionPreference = $false
@@ -102,13 +102,13 @@ function Invoke-CyotDotNet {
     return $output -join "`n"
 }
 
-function Build-CyotDotNetPackage {
+function Build-EppDotNetPackage {
     param([string] $SourcePath, [string] $Directory)
 
     if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
         throw 'The .NET language needs the .NET 8 SDK on this computer. Install it once; setup performs the build automatically.'
     }
-    $versions = @((Invoke-CyotDotNet --list-sdks) -split '\r?\n' | ForEach-Object {
+    $versions = @((Invoke-EppDotNet --list-sdks) -split '\r?\n' | ForEach-Object {
         if ($_ -match '^(8\.\d+\.\d+)\s') { [Version]$Matches[1] }
     } | Sort-Object -Descending)
     if (-not $versions.Count) { throw 'Install the .NET 8 SDK before deploying the .NET language. No Azure resources were changed.' }
@@ -120,17 +120,17 @@ function Build-CyotDotNetPackage {
     Write-Host 'Building .NET 8 for Linux automatically...' -ForegroundColor Cyan
     Push-Location -LiteralPath $sourceDirectory
     try {
-        Invoke-CyotDotNet -Arguments @('publish', 'dotnet.csproj', '--configuration', 'Release', '--runtime', 'linux-x64',
+        Invoke-EppDotNet -Arguments @('publish', 'dotnet.csproj', '--configuration', 'Release', '--runtime', 'linux-x64',
             '--self-contained', 'false', '-p:UseAppHost=false', '--output', $publishDirectory, '--nologo') | Out-Null
     }
     finally { Pop-Location }
     $path = Join-Path $Directory 'dotnet-ready.zip'
     [IO.Compression.ZipFile]::CreateFromDirectory($publishDirectory, $path)
-    Assert-CyotArchive -Path $path -Language dotnet -Kind ready
+    Assert-EppArchive -Path $path -Language dotnet -Kind ready
     return $path
 }
 
-function Get-CyotPackage {
+function Get-EppPackage {
     param($Selection, [string] $Directory)
 
     Write-Host "Downloading $($Selection.DisplayName) and verifying its published checksum automatically..." -ForegroundColor Cyan
@@ -138,15 +138,15 @@ function Get-CyotPackage {
     Invoke-WebRequest -Uri $Selection.ChecksumsUrl -OutFile $checksumPath -TimeoutSec 60
     if ((Get-Item -LiteralPath $checksumPath).Length -gt 1MB) { throw 'The release checksum file is unexpectedly large.' }
     $fileName = ([Uri]$Selection.Url).Segments[-1]
-    $expected = Get-CyotPublishedChecksum -Text (Get-Content -LiteralPath $checksumPath -Raw -Encoding utf8) -FileName $fileName
+    $expected = Get-EppPublishedChecksum -Text (Get-Content -LiteralPath $checksumPath -Raw -Encoding utf8) -FileName $fileName
     $sourcePath = Join-Path $Directory $fileName
     Invoke-WebRequest -Uri $Selection.Url -OutFile $sourcePath -TimeoutSec 300
     if ((Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash -ine $expected) {
         throw 'The downloaded Function ZIP does not match its published SHA-256. No Azure resources were changed.'
     }
     $kind = if ($Selection.BuildStrategy -eq 'ready') { 'ready' } else { 'source' }
-    Assert-CyotArchive -Path $sourcePath -Language $Selection.Id -Kind $kind
-    $path = if ($Selection.BuildStrategy -eq 'dotnet-publish') { Build-CyotDotNetPackage -SourcePath $sourcePath -Directory $Directory } else { $sourcePath }
+    Assert-EppArchive -Path $sourcePath -Language $Selection.Id -Kind $kind
+    $path = if ($Selection.BuildStrategy -eq 'dotnet-publish') { Build-EppDotNetPackage -SourcePath $sourcePath -Directory $Directory } else { $sourcePath }
     return [pscustomobject]@{
         Path = $path
         SourceSha256 = $expected

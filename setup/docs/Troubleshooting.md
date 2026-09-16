@@ -49,10 +49,10 @@ instead of repeatedly retrying or hiding the error.
 
 ## Remove-Module says Graph Authentication is required by Graph Applications
 
-Older setup versions imported the Graph SDK inside the temporary CYOT module. Unloading that
+Older setup versions imported the Graph SDK inside the temporary EPP module. Unloading that
 helper could then attempt to remove its Graph dependencies in the wrong order, producing this
 cleanup error. The current version imports both Graph modules into the PowerShell session's global
-scope and unloads only its temporary CYOT helper. Your Graph modules and sign-in context remain
+scope and unloads only its temporary EPP helper. Your Graph modules and sign-in context remain
 available for subsequent commands and reruns.
 
 Do not add `-Force` to remove the Graph SDK. Download the updated launcher and open a fresh
@@ -63,7 +63,7 @@ review the original output and saved deployment summary.
 
 ## Setup still asks for PackageUrl or PackageSha256
 
-You are running an older launcher or source revision. Download `Setup-Cyot.ps1` again and supply
+You are running an older launcher or source revision. Download `Setup-Epp.ps1` again and supply
 the intended `-SourceRepository` and `-SourceRef`. The current version asks for **one language**
 and reads its package URL and published checksum automatically. Remove old package URL/hash
 arguments from saved commands.
@@ -79,8 +79,7 @@ are retained.
 The script can deploy code with these values, but dummy routes cannot deliver real messages.
 Update the provider-owned profile before live use. Telesign requires its API-key secrets in Key
 Vault. Soprano uses the selected OAuth tenant/scope/app ID and outbound managed-identity federation;
-provider consent and API roles remain external onboarding steps. See
-[provider ownership](../providers/README.md).
+provider consent and API roles remain external onboarding steps.
 
 ## A checksum or package download fails
 
@@ -163,5 +162,5 @@ and nonempty Microsoft caller allowlist. Keep `tokenEncryptionKeyId` null on the
 payload JWE encryption is separate from signed bearer-token validation.
 
 For live delivery, replace dummy endpoints and configure the provider's exact Key Vault secret
-names. Test with synthetic evaluation requests before live messages. CYOT policy remains a
+names. Test with synthetic evaluation requests before live messages. EPP policy remains a
 separate, administrator-approved manual operation; no setup code updates it.

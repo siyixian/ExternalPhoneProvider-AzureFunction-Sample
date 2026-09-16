@@ -27,9 +27,9 @@ var runtimes = {
 var runtime = runtimes[language]
 
 var tags = {
-  managedBy: 'CYOT-Setup'
-  cyotApplicationId: applicationId
-  cyotLanguage: language
+  managedBy: 'EPP-Setup'
+  eppApplicationId: applicationId
+  eppLanguage: language
 }
 var blobDataOwnerRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')
 var blobDataContributorRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')

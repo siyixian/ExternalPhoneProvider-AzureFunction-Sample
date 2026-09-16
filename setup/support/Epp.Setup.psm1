@@ -2,9 +2,9 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $script:MicrosoftPhoneProviderAppId = '25ec60fa-f18d-41a4-b398-50044c90ce13'
-. (Join-Path $PSScriptRoot 'Cyot.Packages.ps1')
+. (Join-Path $PSScriptRoot 'Epp.Packages.ps1')
 
-function Read-CyotJson {
+function Read-EppJson {
     param([string] $Path)
 
     $value = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -AsHashtable -ErrorAction Stop
@@ -12,7 +12,7 @@ function Read-CyotJson {
     return $value
 }
 
-function ConvertTo-CyotGuid {
+function ConvertTo-EppGuid {
     param([string] $Value, [switch] $AllowZero)
 
     $guid = [Guid]::Empty
@@ -22,7 +22,7 @@ function ConvertTo-CyotGuid {
     return $guid.ToString('D')
 }
 
-function Assert-CyotHttpsUrl {
+function Assert-EppHttpsUrl {
     param([string] $Value, [switch] $AllowTestHost)
 
     $uri = $null
@@ -35,7 +35,7 @@ function Assert-CyotHttpsUrl {
     }
 }
 
-function Select-CyotOption {
+function Select-EppOption {
     param([object[]] $Entries, [string] $Name, [string] $Value, [switch] $NonInteractive)
 
     $ids = @($Entries | ForEach-Object { $_['id'] })
@@ -57,7 +57,7 @@ function Select-CyotOption {
     }
 }
 
-function Read-CyotInput {
+function Read-EppInput {
     param(
         [string] $Name, [string] $Value, [string] $Hint,
         [ValidateSet('Text', 'Guid', 'Location', 'Prefix', 'PackageUrl', 'Hash')]
@@ -77,7 +77,7 @@ function Read-CyotInput {
         try {
             if (-not $Value -or $Value -match '[\x00-\x1f<>]') { throw 'A nonempty value without placeholders is required.' }
             switch ($Kind) {
-                'Guid' { $Value = ConvertTo-CyotGuid $Value }
+                'Guid' { $Value = ConvertTo-EppGuid $Value }
                 'Location' {
                     if ($Value -cnotmatch '^[a-z][a-z0-9]+$') { throw 'Use an Azure region name such as westus2.' }
                 }
@@ -87,7 +87,7 @@ function Read-CyotInput {
                     }
                 }
                 'PackageUrl' {
-                    Assert-CyotHttpsUrl $Value
+                    Assert-EppHttpsUrl $Value
                     $repositories = @('Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample', $SourceRepository)
                     $allowed = @($repositories | Where-Object {
                         $Value -cmatch ('^https://github\.com/' + [regex]::Escape($_) + '/releases/download/[^/]+/[^/]+\.zip$')
@@ -110,7 +110,7 @@ function Read-CyotInput {
     }
 }
 
-function Get-CyotProvider {
+function Get-EppProvider {
     param(
         [string] $AssetDirectory, [string] $SourceBaseUri, [string] $Provider, [string] $Channel,
         [string] $EndpointRegion, [switch] $NonInteractive,
@@ -122,7 +122,7 @@ function Get-CyotProvider {
     if ($SourceBaseUri -cnotmatch $sourcePattern) {
         throw 'Provider files must come from the same commit-pinned selected repository as the deployment tools.'
     }
-    $catalog = Read-CyotJson (Join-Path $AssetDirectory 'providers/catalog.json')
+    $catalog = Read-EppJson (Join-Path $AssetDirectory 'providers/catalog.json')
     if ($catalog['schemaVersion'] -ne 1 -or -not $catalog['providers']) { throw 'Unsupported or empty provider catalog.' }
     $entries = @($catalog['providers'])
     $ids = @{}
@@ -134,16 +134,16 @@ function Get-CyotProvider {
         }
         $ids[$entry['id']] = $true
     }
-    $selected = Select-CyotOption -Entries $entries -Name Provider -Value $Provider -NonInteractive:$NonInteractive
+    $selected = Select-EppOption -Entries $entries -Name Provider -Value $Provider -NonInteractive:$NonInteractive
 
     $path = Join-Path $AssetDirectory "providers/$($selected['file'])"
     Invoke-WebRequest -Uri "$SourceBaseUri/providers/$($selected['file'])" -OutFile $path -TimeoutSec 60 -MaximumRedirection 0
-    $profile = Read-CyotJson $path
-    return ConvertTo-CyotProviderSettings -Profile $profile -Id $selected['id'] -DisplayName $selected['displayName'] `
+    $profile = Read-EppJson $path
+    return ConvertTo-EppProviderSettings -Profile $profile -Id $selected['id'] -DisplayName $selected['displayName'] `
         -Channel $Channel -EndpointRegion $EndpointRegion -NonInteractive:$NonInteractive
 }
 
-function ConvertTo-CyotProviderSettings {
+function ConvertTo-EppProviderSettings {
     param(
         [Collections.IDictionary] $Profile, [string] $Id, [string] $DisplayName,
         [string] $Channel, [string] $EndpointRegion, [switch] $NonInteractive
@@ -174,7 +174,7 @@ function ConvertTo-CyotProviderSettings {
         }
     }
     elseif ($authenticationMode -eq 'oauth') {
-        try { $null = ConvertTo-CyotGuid $authentication['tenantId'] -AllowZero:$testConfiguration }
+        try { $null = ConvertTo-EppGuid $authentication['tenantId'] -AllowZero:$testConfiguration }
         catch { $issues.Add('deployment.authentication.tenantId must identify the provider OAuth tenant') }
     }
 
@@ -191,7 +191,7 @@ function ConvertTo-CyotProviderSettings {
                 $issues.Add("deployment.routes.$channelId.$regionId is missing")
                 continue
             }
-            try { Assert-CyotHttpsUrl $route['endpoint'] -AllowTestHost:$testConfiguration }
+            try { Assert-EppHttpsUrl $route['endpoint'] -AllowTestHost:$testConfiguration }
             catch { $issues.Add("deployment.routes.$channelId.$regionId.endpoint must be a public HTTPS endpoint") }
             $timeout = $route['timeoutMilliseconds']
             $retry = $route['retryIntervalSeconds']
@@ -202,7 +202,7 @@ function ConvertTo-CyotProviderSettings {
                 $issues.Add("deployment.routes.$channelId.$regionId.retryIntervalSeconds must be a nonnegative integer fitting Int32 milliseconds")
             }
             if ($authenticationMode -eq 'oauth') {
-                try { $null = ConvertTo-CyotGuid $route['appId'] -AllowZero:$testConfiguration }
+                try { $null = ConvertTo-EppGuid $route['appId'] -AllowZero:$testConfiguration }
                 catch { $issues.Add("deployment.routes.$channelId.$regionId.appId must identify the provider API application") }
                 $scope = [string]$route['scope']
                 $resource = $scope -replace '/\.default$', ''
@@ -222,11 +222,11 @@ function ConvertTo-CyotProviderSettings {
         throw "Provider '$DisplayName' is not deployment-ready:`n - $($issues -join "`n - ")`nAsk the provider owner to complete its GitHub JSON. No Azure resources were changed."
     }
 
-    $channelEntry = Select-CyotOption -Entries @(
+    $channelEntry = Select-EppOption -Entries @(
         @{ id = 'sms'; displayName = 'SMS' }
         @{ id = 'voice'; displayName = 'Voice' }
     ) -Name Channel -Value $Channel -NonInteractive:$NonInteractive
-    $regionEntry = Select-CyotOption -Entries @(
+    $regionEntry = Select-EppOption -Entries @(
         @{ id = 'global'; displayName = 'Global endpoint' }
         @{ id = 'eu'; displayName = 'EU endpoint' }
     ) -Name EndpointRegion -Value $EndpointRegion -NonInteractive:$NonInteractive
@@ -242,7 +242,7 @@ function ConvertTo-CyotProviderSettings {
         EPP_PROVIDER_TEST_CONFIGURATION = $testConfiguration.ToString().ToLowerInvariant()
     }
     if ($authenticationMode -eq 'oauth') {
-        $settings.EPP_PROVIDER_TENANT_ID = ConvertTo-CyotGuid $authentication['tenantId'] -AllowZero:$testConfiguration
+        $settings.EPP_PROVIDER_TENANT_ID = ConvertTo-EppGuid $authentication['tenantId'] -AllowZero:$testConfiguration
         $settings.EPP_PROVIDER_SCOPE = [string]$selectedRoute['scope']
         $settings.EPP_PROVIDER_APP_ID = [string]$selectedRoute['appId']
     }
@@ -258,11 +258,11 @@ function ConvertTo-CyotProviderSettings {
     }
 }
 
-function Get-CyotResourceNames {
+function Get-EppResourceNames {
     param([string] $SubscriptionId, [string] $ApplicationId, [string] $ResourcePrefix)
 
     if ($ResourcePrefix -cnotmatch '^[a-z][a-z0-9]{1,7}$') { throw 'ResourcePrefix must be 2-8 lowercase letters/digits, starting with a letter.' }
-    $seed = "$(ConvertTo-CyotGuid $SubscriptionId)|$(ConvertTo-CyotGuid $ApplicationId)|$ResourcePrefix"
+    $seed = "$(ConvertTo-EppGuid $SubscriptionId)|$(ConvertTo-EppGuid $ApplicationId)|$ResourcePrefix"
     $sha = [Security.Cryptography.SHA256]::Create()
     try { $suffix = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($seed))) -replace '-', '').Substring(0, 8).ToLowerInvariant() }
     finally { $sha.Dispose() }
@@ -278,11 +278,11 @@ function Get-CyotResourceNames {
     }
 }
 
-function Invoke-CyotAz {
+function Invoke-EppAz {
     param([Parameter(ValueFromRemainingArguments)][string[]] $Arguments)
 
     $PSNativeCommandUseErrorActionPreference = $false
-    $errorPath = Join-Path ([IO.Path]::GetTempPath()) "cyot-az-$([Guid]::NewGuid().ToString('N')).stderr"
+    $errorPath = Join-Path ([IO.Path]::GetTempPath()) "epp-az-$([Guid]::NewGuid().ToString('N')).stderr"
     try {
         $output = & az @Arguments --only-show-errors 2> $errorPath
         $exitCode = $LASTEXITCODE
@@ -301,7 +301,7 @@ function Invoke-CyotAz {
     finally { if (Test-Path -LiteralPath $errorPath) { Remove-Item -LiteralPath $errorPath -Force } }
 }
 
-function Invoke-CyotDataOperation {
+function Invoke-EppDataOperation {
     param([scriptblock] $Operation)
 
     for ($attempt = 1; $attempt -le 12; $attempt++) {
@@ -314,13 +314,13 @@ function Invoke-CyotDataOperation {
     }
 }
 
-function Import-CyotGraphModules {
+function Import-EppGraphModules {
     # The SDK and its sign-in context belong to the session, not this temporary helper module.
     Import-Module Microsoft.Graph.Authentication -Global -ErrorAction Stop
     Import-Module Microsoft.Graph.Applications -Global -ErrorAction Stop
 }
 
-function Get-CyotInitialGraphContext {
+function Get-EppInitialGraphContext {
     try { return Get-MgContext -ErrorAction Stop }
     catch {
         if ($_.Exception.GetBaseException().Message -cne 'SessionNotInitialized') { throw }
@@ -340,7 +340,7 @@ function Get-CyotInitialGraphContext {
     }
 }
 
-function Get-CyotResourceProviderRequirements {
+function Get-EppResourceProviderRequirements {
     @(
         @{ Namespace = 'Microsoft.Web'; Type = 'sites' }
         @{ Namespace = 'Microsoft.Storage'; Type = 'storageAccounts' }
@@ -351,11 +351,11 @@ function Get-CyotResourceProviderRequirements {
     )
 }
 
-function Get-CyotResourceProviders {
+function Get-EppResourceProviders {
     param([string] $SubscriptionId)
 
-    foreach ($provider in Get-CyotResourceProviderRequirements) {
-        $registration = Invoke-CyotAz provider show --namespace $provider.Namespace --subscription $SubscriptionId --output json |
+    foreach ($provider in Get-EppResourceProviderRequirements) {
+        $registration = Invoke-EppAz provider show --namespace $provider.Namespace --subscription $SubscriptionId --output json |
             ConvertFrom-Json
         if (-not $registration -or -not $registration.PSObject.Properties['registrationState'] -or
             $registration.registrationState -notin @('Registered', 'Registering', 'NotRegistered', 'Unregistering')) {
@@ -375,35 +375,35 @@ function Get-CyotResourceProviders {
     }
 }
 
-function Test-CyotProviderLocation {
+function Test-EppProviderLocation {
     param($Provider, [string] $Location)
 
     return @($Provider.Locations | Where-Object { ($_ -replace '[^a-zA-Z0-9]', '') -ieq $Location }).Count -gt 0
 }
 
-function Assert-CyotProviderLocations {
+function Assert-EppProviderLocations {
     param([object[]] $Providers, [string] $Location)
 
     foreach ($provider in $Providers) {
-        if ($provider.RegistrationState -eq 'Registered' -and -not (Test-CyotProviderLocation $provider $Location)) {
+        if ($provider.RegistrationState -eq 'Registered' -and -not (Test-EppProviderLocation $provider $Location)) {
             throw "'$($provider.Namespace)/$($provider.Type)' is unavailable in '$Location'. Choose another location."
         }
     }
 }
 
-function Assert-CyotPremiumLocation {
+function Assert-EppPremiumLocation {
     param([hashtable] $Inputs)
 
     $endpoint = "https://management.azure.com/subscriptions/$($Inputs.SubscriptionId)/providers/Microsoft.Web/geoRegions"
     $required = @{ 'api-version' = '2024-04-01'; sku = 'ElasticPremium'; linuxWorkersEnabled = 'true' }
     $parameters = @{} + $required
     $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-    $queryPath = Join-Path ([IO.Path]::GetTempPath()) "cyot-regions-$([Guid]::NewGuid().ToString('N')).json"
+    $queryPath = Join-Path ([IO.Path]::GetTempPath()) "epp-regions-$([Guid]::NewGuid().ToString('N')).json"
     try {
         for ($pageNumber = 1; $pageNumber -le 20; $pageNumber++) {
             # A query file keeps ampersands and continuation tokens away from Windows az.cmd parsing.
             $parameters | ConvertTo-Json | Set-Content -LiteralPath $queryPath -Encoding utf8NoBOM
-            $page = Invoke-CyotAz rest --method get --url $endpoint --url-parameters "@$queryPath" `
+            $page = Invoke-EppAz rest --method get --url $endpoint --url-parameters "@$queryPath" `
                 --subscription $Inputs.SubscriptionId --output json | ConvertFrom-Json -AsHashtable
             if ($page -isnot [Collections.IDictionary] -or $page['value'] -isnot [Array]) {
                 throw 'Azure returned an invalid Elastic Premium region response.'
@@ -437,41 +437,41 @@ function Assert-CyotPremiumLocation {
     }
 }
 
-function Test-CyotRegistrationDelay {
+function Test-EppRegistrationDelay {
     param([string] $Message)
 
     if ($Message -notmatch '\b(MissingSubscriptionRegistration|SubscriptionNotRegistered)\b') { return $false }
-    foreach ($provider in Get-CyotResourceProviderRequirements) {
+    foreach ($provider in Get-EppResourceProviderRequirements) {
         if ($Message -match ('(?<![A-Za-z0-9_.])' + [regex]::Escape($provider.Namespace) + '(?![A-Za-z0-9_.])')) { return $true }
     }
     return $false
 }
 
-function Invoke-CyotRegistrationRetry {
+function Invoke-EppRegistrationRetry {
     param([scriptblock] $Operation, [ValidateRange(1, 60)][int] $MaxAttempts = 12)
 
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
         try { return & $Operation }
         catch {
-            if ($attempt -eq $MaxAttempts -or -not (Test-CyotRegistrationDelay $_.Exception.Message)) { throw }
+            if ($attempt -eq $MaxAttempts -or -not (Test-EppRegistrationDelay $_.Exception.Message)) { throw }
             Write-Warning "Waiting for required Azure resource-provider registration to reach this region ($attempt/$MaxAttempts)."
             Start-Sleep -Seconds 10
         }
     }
 }
 
-function Initialize-CyotResourceProviders {
+function Initialize-EppResourceProviders {
     param([hashtable] $Inputs, [ValidateRange(1, 120)][int] $MaxAttempts = 60)
 
     $requested = @{}
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
-        $providers = @(Get-CyotResourceProviders -SubscriptionId $Inputs.SubscriptionId)
-        Assert-CyotProviderLocations -Providers $providers -Location $Inputs.Location
+        $providers = @(Get-EppResourceProviders -SubscriptionId $Inputs.SubscriptionId)
+        Assert-EppProviderLocations -Providers $providers -Location $Inputs.Location
         foreach ($provider in $providers) {
             if ($provider.RegistrationState -eq 'NotRegistered' -and -not $requested.ContainsKey($provider.Namespace)) {
                 Write-Host "Registering Azure resource provider '$($provider.Namespace)' in subscription '$($Inputs.SubscriptionId)'..." -ForegroundColor Cyan
                 try {
-                    Invoke-CyotAz provider register --namespace $provider.Namespace --subscription $Inputs.SubscriptionId --output none | Out-Null
+                    Invoke-EppAz provider register --namespace $provider.Namespace --subscription $Inputs.SubscriptionId --output none | Out-Null
                 }
                 catch {
                     throw [InvalidOperationException]::new(
@@ -483,10 +483,10 @@ function Initialize-CyotResourceProviders {
         }
         # Azure registers region by region. Do not wait for global Registered when this region is usable.
         $pending = @($providers | Where-Object {
-            $_.RegistrationState -eq 'NotRegistered' -or -not (Test-CyotProviderLocation $_ $Inputs.Location)
+            $_.RegistrationState -eq 'NotRegistered' -or -not (Test-EppProviderLocation $_ $Inputs.Location)
         })
         if (-not $pending.Count) {
-            Invoke-CyotRegistrationRetry -Operation { Assert-CyotPremiumLocation -Inputs $Inputs } | Out-Null
+            Invoke-EppRegistrationRetry -Operation { Assert-EppPremiumLocation -Inputs $Inputs } | Out-Null
             return
         }
         if ($attempt -eq $MaxAttempts) {
@@ -498,28 +498,28 @@ function Initialize-CyotResourceProviders {
     }
 }
 
-function Connect-CyotContext {
+function Connect-EppContext {
     param([hashtable] $Inputs, [Collections.IDictionary] $Names, [switch] $NonInteractive)
 
     foreach ($command in @('az', 'New-SelfSignedCertificate', 'Export-Certificate')) {
         if (-not (Get-Command $command -ErrorAction SilentlyContinue)) {
             throw "Missing prerequisite '$command'. Use PowerShell 7 on Windows with Azure CLI; see the setup prerequisites."
         }
-        $cliVersion = Invoke-CyotAz version --output json | ConvertFrom-Json
+        $cliVersion = Invoke-EppAz version --output json | ConvertFrom-Json
         if ([Version]$cliVersion.'azure-cli' -lt [Version]'2.48.1') {
             throw 'Azure CLI 2.48.1 or newer is required for deployment with SCM basic authentication disabled.'
         }
     }
-    Import-CyotGraphModules
-    $account = Invoke-CyotAz account show --subscription $Inputs.SubscriptionId --output json | ConvertFrom-Json
+    Import-EppGraphModules
+    $account = Invoke-EppAz account show --subscription $Inputs.SubscriptionId --output json | ConvertFrom-Json
     if ($account.id -ne $Inputs.SubscriptionId -or $account.tenantId -ne $Inputs.TenantId -or
         $account.state -ne 'Enabled' -or $account.environmentName -ne 'AzureCloud' -or $account.user.type -ne 'user') {
         throw 'Azure CLI must be signed in as a user to the requested enabled subscription and tenant in the public Azure cloud.'
     }
-    $operatorId = Invoke-CyotAz rest --method get --url 'https://graph.microsoft.com/v1.0/me' `
+    $operatorId = Invoke-EppAz rest --method get --url 'https://graph.microsoft.com/v1.0/me' `
         --subscription $Inputs.SubscriptionId --query id --output tsv
-    $operatorId = ConvertTo-CyotGuid $operatorId
-    $graph = Get-CyotInitialGraphContext
+    $operatorId = ConvertTo-EppGuid $operatorId
+    $graph = Get-EppInitialGraphContext
     if (-not $graph -or $graph.TenantId -ne $Inputs.TenantId -or $graph.Environment -ne 'Global' -or
         $graph.AuthType -ne 'Delegated' -or $graph.Scopes -notcontains 'Application.ReadWrite.All') {
         if ($NonInteractive) { throw 'Connect-MgGraph to the customer tenant with Application.ReadWrite.All before noninteractive setup.' }
@@ -534,7 +534,7 @@ function Connect-CyotContext {
     if ($applications.Count -ne 1) { throw 'Complete manual Step 1: exactly one existing application with this client ID is required.' }
     $application = Get-MgApplication -ApplicationId $applications[0].Id `
         -Property Id, AppId, DisplayName, SignInAudience, Api, IdentifierUris, KeyCredentials, TokenEncryptionKeyId -ErrorAction Stop
-    if ($application.SignInAudience -ne 'AzureADMultipleOrgs') { throw 'The existing CYOT application must be organizational multi-tenant. Complete manual Step 1.' }
+    if ($application.SignInAudience -ne 'AzureADMultipleOrgs') { throw 'The existing EPP application must be organizational multi-tenant. Complete manual Step 1.' }
     if ($application.TokenEncryptionKeyId) { throw 'Clear tokenEncryptionKeyId manually on the endpoint app. Easy Auth requires signed, not encrypted, bearer access tokens.' }
     $principals = @(Get-MgServicePrincipal -Filter "appId eq '$($Inputs.ApplicationId)'" -All -ErrorAction Stop)
     if ($principals.Count -ne 1 -or $principals[0].AppRoleAssignmentRequired) {
@@ -543,26 +543,26 @@ function Connect-CyotContext {
     $version = if ($application.Api -and $application.Api.RequestedAccessTokenVersion) { [int]$application.Api.RequestedAccessTokenVersion } else { 1 }
     if ($version -notin @(1, 2)) { throw 'The endpoint application has an unsupported access-token version.' }
 
-    $groupExists = Invoke-CyotAz group exists --name $Names.resourceGroup --subscription $Inputs.SubscriptionId --output tsv
+    $groupExists = Invoke-EppAz group exists --name $Names.resourceGroup --subscription $Inputs.SubscriptionId --output tsv
     if ($groupExists -eq 'true') {
-        $tags = Invoke-CyotAz group show --name $Names.resourceGroup --subscription $Inputs.SubscriptionId --query tags --output json |
+        $tags = Invoke-EppAz group show --name $Names.resourceGroup --subscription $Inputs.SubscriptionId --query tags --output json |
             ConvertFrom-Json -AsHashtable
-        if (-not $tags -or $tags['cyotApplicationId'] -ne $Inputs.ApplicationId -or $tags['managedBy'] -ne 'CYOT-Setup') {
-            throw "Resource group '$($Names.resourceGroup)' is not owned by this CYOT application. Choose another prefix; existing resources will not be adopted."
+        if (-not $tags -or $tags['eppApplicationId'] -ne $Inputs.ApplicationId -or $tags['managedBy'] -ne 'EPP-Setup') {
+            throw "Resource group '$($Names.resourceGroup)' is not owned by this EPP application. Choose another prefix; existing resources will not be adopted."
         }
-        if ($tags['cyotLanguage'] -and $tags['cyotLanguage'] -ne $Inputs.Language) {
-            throw "This prefix already hosts '$($tags['cyotLanguage'])'. Use a different prefix for '$($Inputs.Language)' instead of switching a running app's runtime."
+        if ($tags['eppLanguage'] -and $tags['eppLanguage'] -ne $Inputs.Language) {
+            throw "This prefix already hosts '$($tags['eppLanguage'])'. Use a different prefix for '$($Inputs.Language)' instead of switching a running app's runtime."
         }
     }
     elseif ($groupExists -ne 'false') { throw 'Azure returned an invalid resource-group existence result.' }
 
-    $resourceProviders = @(Get-CyotResourceProviders -SubscriptionId $Inputs.SubscriptionId)
-    Assert-CyotProviderLocations -Providers $resourceProviders -Location $Inputs.Location
+    $resourceProviders = @(Get-EppResourceProviders -SubscriptionId $Inputs.SubscriptionId)
+    Assert-EppProviderLocations -Providers $resourceProviders -Location $Inputs.Location
     $web = $resourceProviders | Where-Object Namespace -eq 'Microsoft.Web'
     if ($web.RegistrationState -eq 'Registered') {
-        try { Assert-CyotPremiumLocation -Inputs $Inputs }
+        try { Assert-EppPremiumLocation -Inputs $Inputs }
         catch {
-            if (-not (Test-CyotRegistrationDelay $_.Exception.Message)) { throw }
+            if (-not (Test-EppRegistrationDelay $_.Exception.Message)) { throw }
             Write-Warning 'Azure resource-provider registration is still reaching this region. Availability will be checked again after approval.'
         }
     }
@@ -572,7 +572,7 @@ function Connect-CyotContext {
     }
 }
 
-function Show-CyotPlan {
+function Show-EppPlan {
     param([hashtable] $Inputs, [Collections.IDictionary] $Names, $ProviderConfiguration, $Context, [string] $SourceBaseUri)
 
     Write-Host "`nDeployment plan (create or update)" -ForegroundColor Cyan
@@ -614,7 +614,7 @@ function Show-CyotPlan {
     Write-Host "Create/reuse an RSA certificate in CurrentUser\My; store its private key as phone-provider-decryption-key in the new vault."
     Write-Host 'Deploy the verified package, synchronize triggers, and enable HTTPS ingress guarded by Easy Auth.'
     Write-Host 'Premium EP1, storage, and telemetry incur charges. Reruns can restart the Function. No automatic rollback or deletion.' -ForegroundColor Yellow
-    Write-Host 'This does NOT register an application, grant provider API roles, or activate/change CYOT policy.' -ForegroundColor Yellow
+    Write-Host 'This does NOT register an application, grant provider API roles, or activate/change EPP policy.' -ForegroundColor Yellow
     if ($Inputs.BuildStrategy -eq 'remote-build') {
         Write-Host 'Python: enable the Entra-protected SCM endpoint, run Azure remote build, then save only the built output to private package storage.'
     }
@@ -624,7 +624,7 @@ function Show-CyotPlan {
     }
 }
 
-function Confirm-CyotDeployment {
+function Confirm-EppDeployment {
     param([switch] $NonInteractive, [switch] $ApproveDeployment)
 
     if ($ApproveDeployment) { return $true }
@@ -637,10 +637,10 @@ function Confirm-CyotDeployment {
     }
 }
 
-function Get-CyotEncryptionCertificate {
+function Get-EppEncryptionCertificate {
     param([hashtable] $Inputs, [string] $OutputDirectory)
 
-    $subject = "CN=CYOT-$($Inputs.ApplicationId)-$($Inputs.ResourcePrefix)"
+    $subject = "CN=EPP-$($Inputs.ApplicationId)-$($Inputs.ResourcePrefix)"
     $certificate = Get-ChildItem Cert:\CurrentUser\My |
         Where-Object { $_.Subject -eq $subject -and $_.HasPrivateKey -and $_.NotAfter -gt (Get-Date).AddDays(30) } |
         Sort-Object NotAfter -Descending | Select-Object -First 1
@@ -654,11 +654,11 @@ function Get-CyotEncryptionCertificate {
     return $certificate
 }
 
-function Set-CyotPrivateKey {
+function Set-EppPrivateKey {
     param($Certificate, [string] $KeyId, [string] $VaultName, [string] $SubscriptionId, [string] $Directory)
 
-    $existing = @(Invoke-CyotDataOperation {
-        Invoke-CyotAz keyvault secret list --vault-name $VaultName --subscription $SubscriptionId --output json
+    $existing = @(Invoke-EppDataOperation {
+        Invoke-EppAz keyvault secret list --vault-name $VaultName --subscription $SubscriptionId --output json
     } | ConvertFrom-Json -AsHashtable)
     $match = @($existing | Where-Object { $_['name'] -eq 'phone-provider-decryption-key' })
     if ($match.Count -and $match[0]['tags'] -and
@@ -677,8 +677,8 @@ function Set-CyotPrivateKey {
     try {
         $pem = "-----BEGIN PRIVATE KEY-----`n$([Convert]::ToBase64String($rsa.ExportPkcs8PrivateKey(), [Base64FormattingOptions]::InsertLineBreaks))`n-----END PRIVATE KEY-----"
         [IO.File]::WriteAllText($privatePath, [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($pem)), [Text.UTF8Encoding]::new($false))
-        Invoke-CyotDataOperation {
-            Invoke-CyotAz keyvault secret set --vault-name $VaultName --subscription $SubscriptionId `
+        Invoke-EppDataOperation {
+            Invoke-EppAz keyvault secret set --vault-name $VaultName --subscription $SubscriptionId `
                 --name phone-provider-decryption-key --file $privatePath --encoding utf-8 `
                 --tags "certificateThumbprint=$($Certificate.Thumbprint)" "encryptionKeyId=$KeyId" --output none
         } | Out-Null
@@ -689,7 +689,7 @@ function Set-CyotPrivateKey {
     }
 }
 
-function Set-CyotApplicationEndpoint {
+function Set-EppApplicationEndpoint {
     param([hashtable] $Inputs, $Context, $Outputs, $Certificate, [string] $KeyId, [bool] $ConfigureFederation = $true)
 
     $application = Get-MgApplication -ApplicationId $Context.Application.Id `
@@ -699,7 +699,7 @@ function Set-CyotApplicationEndpoint {
     }
     $key = @{
         CustomKeyIdentifier = $Certificate.GetCertHash()
-        DisplayName = "CYOT encryption $($Certificate.Thumbprint)"
+        DisplayName = "EPP encryption $($Certificate.Thumbprint)"
         Key = $Certificate.GetRawCertData()
         KeyId = $KeyId
         Type = 'AsymmetricX509Cert'
@@ -717,7 +717,7 @@ function Set-CyotApplicationEndpoint {
 
     $issuer = "https://login.microsoftonline.com/$($Inputs.TenantId)/v2.0"
     $audience = 'api://AzureADTokenExchange'
-    $credentialName = "cyot-$($Outputs.functionAppName.value)-outbound"
+    $credentialName = "epp-$($Outputs.functionAppName.value)-outbound"
     $credentials = @(Get-MgApplicationFederatedIdentityCredential -ApplicationId $application.Id -All -ErrorAction Stop)
     $matching = @($credentials | Where-Object {
         $_.Issuer -ceq $issuer -and $_.Subject -ceq $Outputs.outboundPrincipalId.value -and
@@ -731,10 +731,10 @@ function Set-CyotApplicationEndpoint {
     }
 }
 
-function Assert-CyotAuthentication {
+function Assert-EppAuthentication {
     param([string] $SiteId, [hashtable] $Inputs, $Context, [string] $IdentifierUri)
 
-    $auth = Invoke-CyotAz rest --method get --url "https://management.azure.com$SiteId/config/authsettingsV2?api-version=2024-04-01" `
+    $auth = Invoke-EppAz rest --method get --url "https://management.azure.com$SiteId/config/authsettingsV2?api-version=2024-04-01" `
         --subscription $Inputs.SubscriptionId --output json | ConvertFrom-Json -AsHashtable
     $properties = $auth['properties']
     if ($properties -isnot [Collections.IDictionary]) { throw 'Easy Auth readback is missing. Ingress will not be opened.' }
@@ -762,17 +762,17 @@ function Assert-CyotAuthentication {
     }
 }
 
-function Set-CyotPublicAccess {
+function Set-EppPublicAccess {
     param([string] $SiteId, [string] $SubscriptionId, [ValidateSet('Enabled', 'Disabled')][string] $Access)
 
-    Invoke-CyotAz resource update --ids $SiteId --api-version 2024-04-01 --set "properties.publicNetworkAccess=$Access" `
+    Invoke-EppAz resource update --ids $SiteId --api-version 2024-04-01 --set "properties.publicNetworkAccess=$Access" `
         --subscription $SubscriptionId --output none | Out-Null
 }
 
-function Set-CyotPackageSettings {
+function Set-EppPackageSettings {
     param([string] $SiteId, [string] $SubscriptionId, [string] $PackageUrl, [string] $Directory)
 
-    $current = Invoke-CyotAz rest --method post `
+    $current = Invoke-EppAz rest --method post `
         --url "https://management.azure.com$SiteId/config/appsettings/list?api-version=2024-04-01" `
         --subscription $SubscriptionId --output json | ConvertFrom-Json -AsHashtable
     if ($current['properties'] -isnot [Collections.IDictionary]) { throw 'Could not read existing Function App settings.' }
@@ -785,19 +785,19 @@ function Set-CyotPackageSettings {
     $path = Join-Path $Directory 'runtime-appsettings.json'
     try {
         @{ properties = $settings } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $path -Encoding utf8NoBOM
-        Invoke-CyotAz rest --method put --url "https://management.azure.com$SiteId/config/appsettings?api-version=2024-04-01" `
+        Invoke-EppAz rest --method put --url "https://management.azure.com$SiteId/config/appsettings?api-version=2024-04-01" `
             --body "@$path" --headers 'Content-Type=application/json' --subscription $SubscriptionId --output none | Out-Null
     }
     finally { if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force } }
 }
 
-function Build-CyotPythonPackage {
+function Build-EppPythonPackage {
     param([hashtable] $Inputs, [Collections.IDictionary] $Names, [string] $SiteId, [string] $SourcePath, [string] $Directory)
 
     Write-Host 'Building Python and its Linux dependencies in Azure automatically...' -ForegroundColor Cyan
-    Invoke-CyotAz functionapp deployment source config-zip --resource-group $Names.resourceGroup --name $Names.functionApp `
+    Invoke-EppAz functionapp deployment source config-zip --resource-group $Names.resourceGroup --name $Names.functionApp `
         --subscription $Inputs.SubscriptionId --src $SourcePath --build-remote true --timeout 1800 --output none | Out-Null
-    $site = Invoke-CyotAz rest --method get --url "https://management.azure.com$SiteId`?api-version=2024-04-01" `
+    $site = Invoke-EppAz rest --method get --url "https://management.azure.com$SiteId`?api-version=2024-04-01" `
         --subscription $Inputs.SubscriptionId --output json | ConvertFrom-Json -AsHashtable
     $hosts = @($site['properties']['enabledHostNames'] | Where-Object { $_ -match '^[a-zA-Z0-9-]+\.scm\.(?:[a-zA-Z0-9-]+\.)?azurewebsites\.net$' })
     if ($hosts.Count -ne 1) { throw 'Azure did not return exactly one public-cloud SCM hostname for the Function App.' }
@@ -805,7 +805,7 @@ function Build-CyotPythonPackage {
     $secureToken = $null
     $path = Join-Path $Directory 'python-ready.zip'
     try {
-        $token = Invoke-CyotAz account get-access-token --subscription $Inputs.SubscriptionId `
+        $token = Invoke-EppAz account get-access-token --subscription $Inputs.SubscriptionId `
             --resource 'https://management.azure.com/' --query accessToken --output tsv
         if ([string]::IsNullOrWhiteSpace($token)) { throw 'Azure CLI did not return an SCM access token.' }
         $secureToken = ConvertTo-SecureString $token -AsPlainText -Force
@@ -817,16 +817,16 @@ function Build-CyotPythonPackage {
         if ($secureToken) { $secureToken.Dispose() }
     }
     # The source ZIP must never become the persistent run-from-package artifact.
-    Assert-CyotArchive -Path $path -Language python -Kind ready
+    Assert-EppArchive -Path $path -Language python -Kind ready
     return $path
 }
 
-function Sync-CyotFunctionTriggers {
+function Sync-EppFunctionTriggers {
     param([string] $SiteId, [string] $SubscriptionId)
 
     for ($attempt = 1; $attempt -le 12; $attempt++) {
         try {
-            Invoke-CyotAz rest --method post --url "https://management.azure.com$SiteId/syncfunctiontriggers?api-version=2024-04-01" `
+            Invoke-EppAz rest --method post --url "https://management.azure.com$SiteId/syncfunctiontriggers?api-version=2024-04-01" `
                 --subscription $SubscriptionId --output none | Out-Null
             return
         }
@@ -839,11 +839,11 @@ function Sync-CyotFunctionTriggers {
     }
 }
 
-function Assert-CyotFunctionPublished {
+function Assert-EppFunctionPublished {
     param([hashtable] $Inputs, [Collections.IDictionary] $Names)
 
     for ($attempt = 1; $attempt -le 6; $attempt++) {
-        $functions = @(Invoke-CyotAz functionapp function list --resource-group $Names.resourceGroup --name $Names.functionApp `
+        $functions = @(Invoke-EppAz functionapp function list --resource-group $Names.resourceGroup --name $Names.functionApp `
             --subscription $Inputs.SubscriptionId --output json | ConvertFrom-Json)
         if (@($functions | Where-Object { $_ -and $_.name -match '(^|/)SendOtp$' }).Count -eq 1) { return }
         if ($attempt -lt 6) { Start-Sleep -Seconds 10 }
@@ -851,7 +851,7 @@ function Assert-CyotFunctionPublished {
     throw 'The package was published but Azure did not register SendOtp. Inspect the Function runtime/build logs; deployment is not complete.'
 }
 
-function Invoke-CyotDeployment {
+function Invoke-EppDeployment {
     param(
         [hashtable] $Inputs, [Collections.IDictionary] $Names, $ProviderConfiguration, $Context,
         [string] $AssetDirectory, $Package, [string] $OutputDirectory, [string] $SourceBaseUri
@@ -863,9 +863,9 @@ function Invoke-CyotDeployment {
     }
     # The single setup approval covers these planned writes, including SDK/certificate cmdlets.
     $ConfirmPreference = 'None'
-    Initialize-CyotResourceProviders -Inputs $Inputs
+    Initialize-EppResourceProviders -Inputs $Inputs
     New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
-    $certificate = Get-CyotEncryptionCertificate -Inputs $Inputs -OutputDirectory $OutputDirectory
+    $certificate = Get-EppEncryptionCertificate -Inputs $Inputs -OutputDirectory $OutputDirectory
     $existingKeys = @($Context.Application.KeyCredentials | Where-Object {
         $_ -and $_.Usage -eq 'Encrypt' -and $_.CustomKeyIdentifier -and
         -not (Compare-Object $_.CustomKeyIdentifier $certificate.GetCertHash())
@@ -893,36 +893,36 @@ function Invoke-CyotDeployment {
     @{ '$schema' = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#'; contentVersion = '1.0.0.0'; parameters = $parameters } |
         ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $parameterPath -Encoding utf8NoBOM
     Write-Host 'Deploying Bicep infrastructure...' -ForegroundColor Cyan
-    $deploymentName = "cyot-$($Inputs.ResourcePrefix)-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
-    $outputs = Invoke-CyotRegistrationRetry -Operation {
-        Invoke-CyotAz deployment sub create --name $deploymentName `
+    $deploymentName = "epp-$($Inputs.ResourcePrefix)-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
+    $outputs = Invoke-EppRegistrationRetry -Operation {
+        Invoke-EppAz deployment sub create --name $deploymentName `
             --subscription $Inputs.SubscriptionId --location $Inputs.Location --template-file (Join-Path $AssetDirectory 'infra/main.bicep') `
             --parameters "@$parameterPath" --query properties.outputs --output json
     } | ConvertFrom-Json
     foreach ($mapping in @{ functionAppName = 'functionApp'; storageAccountName = 'storageAccount'; keyVaultName = 'keyVault'; resourceGroupName = 'resourceGroup' }.GetEnumerator()) {
         if ($outputs.($mapping.Key).value -cne $Names[$mapping.Value]) { throw 'Bicep outputs do not match the approved resource names. Stop and inspect the deployment.' }
     }
-    $null = ConvertTo-CyotGuid $outputs.outboundPrincipalId.value
-    Assert-CyotHttpsUrl $outputs.endpointUrl.value
-    if ([Text.Encoding]::UTF8.GetByteCount($outputs.endpointUrl.value) -gt 100) { throw 'The deployed endpoint URL exceeds the CYOT 100-byte limit.' }
-    Set-CyotPrivateKey -Certificate $certificate -KeyId $keyId -VaultName $Names.keyVault `
+    $null = ConvertTo-EppGuid $outputs.outboundPrincipalId.value
+    Assert-EppHttpsUrl $outputs.endpointUrl.value
+    if ([Text.Encoding]::UTF8.GetByteCount($outputs.endpointUrl.value) -gt 100) { throw 'The deployed endpoint URL exceeds the EPP 100-byte limit.' }
+    Set-EppPrivateKey -Certificate $certificate -KeyId $keyId -VaultName $Names.keyVault `
         -SubscriptionId $Inputs.SubscriptionId -Directory $AssetDirectory
-    Set-CyotApplicationEndpoint -Inputs $Inputs -Context $Context -Outputs $outputs -Certificate $certificate -KeyId $keyId `
+    Set-EppApplicationEndpoint -Inputs $Inputs -Context $Context -Outputs $outputs -Certificate $certificate -KeyId $keyId `
         -ConfigureFederation:($Inputs.ProviderAuthentication -eq 'oauth')
     $siteId = "/subscriptions/$($Inputs.SubscriptionId)/resourceGroups/$($Names.resourceGroup)/providers/Microsoft.Web/sites/$($Names.functionApp)"
     $ingressOpened = $false
     try {
-        Assert-CyotAuthentication -SiteId $siteId -Inputs $Inputs -Context $Context -IdentifierUri $outputs.identifierUri.value
+        Assert-EppAuthentication -SiteId $siteId -Inputs $Inputs -Context $Context -IdentifierUri $outputs.identifierUri.value
         $packagePath = $Package.Path
         if ($Package.RequiresRemoteBuild) {
             $ingressOpened = $true
-            Set-CyotPublicAccess -SiteId $siteId -SubscriptionId $Inputs.SubscriptionId -Access Enabled
-            $packagePath = Build-CyotPythonPackage -Inputs $Inputs -Names $Names -SiteId $siteId -SourcePath $Package.Path -Directory $AssetDirectory
+            Set-EppPublicAccess -SiteId $siteId -SubscriptionId $Inputs.SubscriptionId -Access Enabled
+            $packagePath = Build-EppPythonPackage -Inputs $Inputs -Names $Names -SiteId $siteId -SourcePath $Package.Path -Directory $AssetDirectory
             $Inputs.PackageSha256 = (Get-FileHash -LiteralPath $packagePath -Algorithm SHA256).Hash.ToLowerInvariant()
         }
         Write-Host 'Publishing the ready-to-run Function package...' -ForegroundColor Cyan
-        Invoke-CyotDataOperation {
-            Invoke-CyotAz storage blob upload --account-name $Names.storageAccount --container-name packages `
+        Invoke-EppDataOperation {
+            Invoke-EppAz storage blob upload --account-name $Names.storageAccount --container-name packages `
                 --name "$($Inputs.PackageSha256).zip" --file $packagePath --auth-mode login --overwrite true `
                 --subscription $Inputs.SubscriptionId --output none
         } | Out-Null
@@ -931,22 +931,22 @@ function Invoke-CyotDeployment {
                 throw 'Azure returned an unexpected package storage URL. The app will not mount it.'
             }
             $packageUrl = "$($outputs.packageContainerUrl.value)$($Inputs.PackageSha256).zip"
-            Assert-CyotHttpsUrl $packageUrl
-            Set-CyotPackageSettings -SiteId $siteId -SubscriptionId $Inputs.SubscriptionId -PackageUrl $packageUrl -Directory $AssetDirectory
+            Assert-EppHttpsUrl $packageUrl
+            Set-EppPackageSettings -SiteId $siteId -SubscriptionId $Inputs.SubscriptionId -PackageUrl $packageUrl -Directory $AssetDirectory
         }
         if (-not $ingressOpened) {
             $ingressOpened = $true
-            Set-CyotPublicAccess -SiteId $siteId -SubscriptionId $Inputs.SubscriptionId -Access Enabled
+            Set-EppPublicAccess -SiteId $siteId -SubscriptionId $Inputs.SubscriptionId -Access Enabled
         }
-        Invoke-CyotAz functionapp restart --resource-group $Names.resourceGroup --name $Names.functionApp `
+        Invoke-EppAz functionapp restart --resource-group $Names.resourceGroup --name $Names.functionApp `
             --subscription $Inputs.SubscriptionId --output none | Out-Null
-        Sync-CyotFunctionTriggers -SiteId $siteId -SubscriptionId $Inputs.SubscriptionId
-        Assert-CyotFunctionPublished -Inputs $Inputs -Names $Names
+        Sync-EppFunctionTriggers -SiteId $siteId -SubscriptionId $Inputs.SubscriptionId
+        Assert-EppFunctionPublished -Inputs $Inputs -Names $Names
     }
     catch {
         $deploymentError = $_
         if ($ingressOpened) {
-            try { Set-CyotPublicAccess -SiteId $siteId -SubscriptionId $Inputs.SubscriptionId -Access Disabled }
+            try { Set-EppPublicAccess -SiteId $siteId -SubscriptionId $Inputs.SubscriptionId -Access Disabled }
             catch { throw [AggregateException]::new('Deployment failed and public ingress could not be disabled. Inspect the Function App immediately.', [Exception[]]@($deploymentError.Exception, $_.Exception)) }
         }
         throw $deploymentError
@@ -967,14 +967,14 @@ function Invoke-CyotDeployment {
     $result | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $resultPath -Encoding utf8NoBOM
     Write-Host "Endpoint deployed: $($outputs.endpointUrl.value)" -ForegroundColor Green
     Write-Host "Saved identifiers: $resultPath"
-    Write-Host 'CYOT policy was not changed. Validate the endpoint, then complete manual Step 3.' -ForegroundColor Yellow
+    Write-Host 'EPP policy was not changed. Validate the endpoint, then complete manual Step 3.' -ForegroundColor Yellow
     if ($ProviderConfiguration.IsTestConfiguration) {
         Write-Warning 'The code and real app settings were deployed with DUMMY provider values. Replace them and provision the adapter-named Key Vault credentials before live SMS/voice delivery.'
     }
     return [pscustomobject]$result
 }
 
-function Invoke-CyotSetup {
+function Invoke-EppSetup {
     [CmdletBinding()]
     param(
         [string] $TenantId, [string] $SubscriptionId, [string] $ApplicationId, [string] $Location,
@@ -991,36 +991,36 @@ function Invoke-CyotSetup {
     Write-Host "`nEnter missing customer settings. Supplied values will not be requested again."
     $inputs = @{}
     foreach ($name in @('TenantId', 'SubscriptionId', 'ApplicationId')) {
-        $inputs[$name] = Read-CyotInput -Name $name -Value (Get-Variable -Name $name -ValueOnly) -Kind Guid `
+        $inputs[$name] = Read-EppInput -Name $name -Value (Get-Variable -Name $name -ValueOnly) -Kind Guid `
             -Hint 'Use the customer tenant/subscription or existing application CLIENT ID' -NonInteractive:$NonInteractive
     }
-    $inputs.Location = Read-CyotInput Location $Location -Kind Location -Hint 'Azure region, for example westus2' -NonInteractive:$NonInteractive
-    $inputs.ProviderAccountName = Read-CyotInput ProviderAccountName $ProviderAccountName -Hint 'Your provider account/sender name, not a credential' -NonInteractive:$NonInteractive
-    $selection = Get-CyotLanguage -AssetDirectory $AssetDirectory -Language $Language -SourceRepository $SourceRepository -NonInteractive:$NonInteractive
+    $inputs.Location = Read-EppInput Location $Location -Kind Location -Hint 'Azure region, for example westus2' -NonInteractive:$NonInteractive
+    $inputs.ProviderAccountName = Read-EppInput ProviderAccountName $ProviderAccountName -Hint 'Your provider account/sender name, not a credential' -NonInteractive:$NonInteractive
+    $selection = Get-EppLanguage -AssetDirectory $AssetDirectory -Language $Language -SourceRepository $SourceRepository -NonInteractive:$NonInteractive
     $inputs.Language = $selection.Id
     $inputs.PackageUrl = $selection.Url
     $inputs.BuildStrategy = $selection.BuildStrategy
 
-    $providerConfiguration = Get-CyotProvider -AssetDirectory $AssetDirectory -SourceBaseUri $SourceBaseUri -Provider $Provider `
+    $providerConfiguration = Get-EppProvider -AssetDirectory $AssetDirectory -SourceBaseUri $SourceBaseUri -Provider $Provider `
         -Channel $Channel -EndpointRegion $EndpointRegion -NonInteractive:$NonInteractive -SourceRepository $SourceRepository
     $inputs.ProviderAuthentication = $providerConfiguration.AuthenticationMode
-    $inputs.ResourcePrefix = Read-CyotInput ResourcePrefix $ResourcePrefix -Kind Prefix -Hint '2-8 lowercase letters/digits; resource names add epp after this prefix' -NonInteractive:$NonInteractive
-    $names = Get-CyotResourceNames -SubscriptionId $inputs.SubscriptionId -ApplicationId $inputs.ApplicationId -ResourcePrefix $inputs.ResourcePrefix
+    $inputs.ResourcePrefix = Read-EppInput ResourcePrefix $ResourcePrefix -Kind Prefix -Hint '2-8 lowercase letters/digits; resource names add epp after this prefix' -NonInteractive:$NonInteractive
+    $names = Get-EppResourceNames -SubscriptionId $inputs.SubscriptionId -ApplicationId $inputs.ApplicationId -ResourcePrefix $inputs.ResourcePrefix
 
     Write-Host "`nChecking prerequisites and the selected Azure context (no resource changes)..." -ForegroundColor Cyan
-    $context = Connect-CyotContext -Inputs $inputs -Names $names -NonInteractive:$NonInteractive
-    $package = Get-CyotPackage -Selection $selection -Directory $AssetDirectory
+    $context = Connect-EppContext -Inputs $inputs -Names $names -NonInteractive:$NonInteractive
+    $package = Get-EppPackage -Selection $selection -Directory $AssetDirectory
     $inputs.PackageSha256 = $package.Sha256
     $inputs.SourcePackageSha256 = $package.SourceSha256
-    Invoke-CyotAz bicep build --file (Join-Path $AssetDirectory 'infra/main.bicep') `
+    Invoke-EppAz bicep build --file (Join-Path $AssetDirectory 'infra/main.bicep') `
         --outfile (Join-Path $AssetDirectory 'main.json') | Out-Null
-    Show-CyotPlan -Inputs $inputs -Names $names -ProviderConfiguration $providerConfiguration -Context $context -SourceBaseUri $SourceBaseUri
-    if (-not (Confirm-CyotDeployment -NonInteractive:$NonInteractive -ApproveDeployment:$ApproveDeployment)) {
+    Show-EppPlan -Inputs $inputs -Names $names -ProviderConfiguration $providerConfiguration -Context $context -SourceBaseUri $SourceBaseUri
+    if (-not (Confirm-EppDeployment -NonInteractive:$NonInteractive -ApproveDeployment:$ApproveDeployment)) {
         Write-Host 'Cancelled. No Azure resources were changed.' -ForegroundColor Yellow
         return
     }
     try {
-        Invoke-CyotDeployment -Inputs $inputs -Names $names -ProviderConfiguration $providerConfiguration -Context $context `
+        Invoke-EppDeployment -Inputs $inputs -Names $names -ProviderConfiguration $providerConfiguration -Context $context `
             -AssetDirectory $AssetDirectory -Package $package -OutputDirectory $OutputDirectory -SourceBaseUri $SourceBaseUri
     }
     catch {
@@ -1029,4 +1029,4 @@ function Invoke-CyotSetup {
     }
 }
 
-Export-ModuleMember -Function Invoke-CyotSetup
+Export-ModuleMember -Function Invoke-EppSetup
