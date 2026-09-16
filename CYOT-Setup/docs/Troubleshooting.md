@@ -142,9 +142,17 @@ rollback occurs. Inspect the named Azure deployment and the reported error, then
 same tenant, subscription, application, language, and prefix after correcting it.
 
 Recognized storage/Key Vault RBAC propagation errors are retried for at most twelve attempts.
-Transient Function startup errors also have bounded retries. A successful upload alone is not
-success: `SendOtp` must appear in Azure's function metadata. No success summary is written if
-publication or registration fails.
+Transient Function startup errors also have bounded retries. This includes the specific ARM
+`BadRequest` response `Encountered an error (InternalServerError) from host runtime`, which Azure can
+return while a newly restarted host is still loading an otherwise valid package. Generic
+`InternalServerError` responses are not retried. A successful upload alone is not success:
+`SendOtp` must appear in Azure's function metadata. No success summary is written if publication or
+registration fails.
+
+If setup exhausts the retries, inspect Application Insights for host initialization, worker startup,
+and function discovery errors before rerunning. The expected healthy sequence includes `Worker process
+started and initialized`, `Found the following functions: Host.Functions.SendOtp`, and `Job host
+started`. Setup closes public ingress after a persistent publication failure.
 
 ## The endpoint returns 401 or live delivery fails
 

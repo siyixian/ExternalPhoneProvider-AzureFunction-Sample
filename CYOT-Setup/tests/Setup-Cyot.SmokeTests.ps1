@@ -359,6 +359,13 @@ function Invoke-FlowFixture {
                     if ($uri -match '/syncfunctiontriggers\?') {
                         $script:Fixture.SyncAttempts++
                         if ($script:Fixture.Fault -in @('sync', 'cleanup')) { throw 'Simulated trigger synchronization failure.' }
+                        if ($script:Fixture.Fault -eq 'unrelated-internal-error') {
+                            throw 'InternalServerError from an unrelated deployment proxy.'
+                        }
+                        if ($script:Fixture.Fault -eq 'host-runtime-internal-persistent' -or
+                            ($script:Fixture.Fault -eq 'host-runtime-internal' -and $script:Fixture.SyncAttempts -lt 3)) {
+                            throw 'Bad Request: Encountered an error (InternalServerError) from host runtime.'
+                        }
                         if ($script:Fixture.Fault -eq 'host-unavailable' -or
                             ($script:Fixture.Fault -eq 'cold-start' -and $script:Fixture.SyncAttempts -lt 3)) {
                             throw 'ServiceUnavailable from host runtime.'
@@ -1014,6 +1021,14 @@ try {
         $run = Invoke-FlowFixture -Fault cold-start
         Assert-True (-not $run.Error -and $run.SyncAttempts -eq 3 -and $null -ne $run.Result) "Cold-start recovery failed: $($run.Error)"
     }
+    Test-Case 'Transient host-runtime InternalServerError is retried' {
+        $run = Invoke-FlowFixture -Fault host-runtime-internal
+        Assert-True (-not $run.Error -and $run.SyncAttempts -eq 3 -and $null -ne $run.Result) "Host-runtime recovery failed: $($run.Error)"
+    }
+    Test-Case 'Unrelated InternalServerError is not retried' {
+        $run = Invoke-FlowFixture -Fault unrelated-internal-error
+        Assert-True ($null -ne $run.Error -and $run.SyncAttempts -eq 1 -and $null -eq $run.Result) 'An unrelated InternalServerError was treated as a transient host-startup response.'
+    }
     Test-Case 'Rerun reuses the existing certificate encryption-key ID' {
         $run = Invoke-FlowFixture -Fault existing-key
         Assert-True (-not $run.Error -and $run.Result.encryptionKeyId -eq 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa') "Rerun rotated the key unexpectedly: $($run.Error)"
@@ -1042,13 +1057,15 @@ try {
             Assert-True (@($run.Trace | Where-Object { $_ -like 'prompt:*' }).Count -eq 0) 'Failure requested approval anyway.'
         }
     }
-    foreach ($fault in @('deployment', 'names', 'key', 'auth', 'sync', 'host-unavailable', 'function-missing', 'enable')) {
+    foreach ($fault in @('deployment', 'names', 'key', 'auth', 'sync', 'host-unavailable', 'host-runtime-internal-persistent', 'function-missing', 'enable')) {
         Test-Case "$fault failure cannot report success or leave public ingress open" {
             $run = Invoke-FlowFixture -Fault $fault
             Assert-True ($null -ne $run.Error -and $null -eq $run.Result) 'A failed deployment reported success.'
             Assert-True ($run.Access -eq 'Disabled') 'Public ingress remained open after a failure.'
             Assert-True (@(Get-ChildItem $run.Inputs.OutputDirectory -Filter 'deployment-*.json').Count -eq 0) 'A success summary was written on failure.'
-            if ($fault -eq 'host-unavailable') { Assert-True ($run.SyncAttempts -eq 12) 'Host readiness retries were not bounded.' }
+            if ($fault -in @('host-unavailable', 'host-runtime-internal-persistent')) {
+                Assert-True ($run.SyncAttempts -eq 12) 'Host readiness retries were not bounded.'
+            }
         }
     }
     Test-Case 'Failure to close ingress is reported explicitly alongside the deployment error' {

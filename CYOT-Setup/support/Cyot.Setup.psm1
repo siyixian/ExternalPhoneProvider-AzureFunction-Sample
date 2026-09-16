@@ -789,7 +789,8 @@ function Sync-CyotFunctionTriggers {
             return
         }
         catch {
-            if ($attempt -eq 12 -or $_.Exception.Message -notmatch 'BadGateway|ServiceUnavailable|GatewayTimeout') { throw }
+            $transientHostError = $_.Exception.Message -match 'BadGateway|ServiceUnavailable|GatewayTimeout|Encountered an error \(InternalServerError\) from host runtime'
+            if ($attempt -eq 12 -or -not $transientHostError) { throw }
             Write-Warning "Waiting for the Function host to load the package ($attempt/12). Easy Auth remains enforced."
             Start-Sleep -Seconds 10
         }
