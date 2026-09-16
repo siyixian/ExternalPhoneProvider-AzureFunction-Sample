@@ -21,6 +21,8 @@ param(
     [string] $ApplicationId,
     [string] $Location,
     [string] $Provider,
+    [string] $Channel,
+    [string] $EndpointRegion,
     [string] $ProviderAccountName,
     [string] $ResourcePrefix,
     [string] $Language,

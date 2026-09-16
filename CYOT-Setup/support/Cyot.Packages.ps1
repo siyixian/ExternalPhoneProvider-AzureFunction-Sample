@@ -9,8 +9,7 @@ function Get-CyotLanguage {
     foreach ($entry in $entries) {
         if ($entry -isnot [Collections.IDictionary] -or -not $strategies.ContainsKey([string]$entry['id']) -or
             $seen.ContainsKey($entry['id']) -or $entry['buildStrategy'] -cne $strategies[$entry['id']] -or
-            $entry['authentication'] -notin @('apiKey', 'ests') -or -not $entry['displayName'] -or
-            $entry['displayName'] -match '[\x00-\x1f]') {
+            -not $entry['displayName'] -or $entry['displayName'] -match '[\x00-\x1f]') {
             throw 'Language catalog contains an invalid, unsupported, or duplicate entry.'
         }
         $seen[$entry['id']] = $true
@@ -24,7 +23,7 @@ function Get-CyotLanguage {
     $entry = Select-CyotOption -Entries $entries -Name Language -Value $Language -NonInteractive:$NonInteractive
     return [pscustomobject]@{
         Id = $entry['id']; DisplayName = $entry['displayName']; Url = $entry['url']; ChecksumsUrl = $entry['checksumsUrl']
-        BuildStrategy = $entry['buildStrategy']; Authentication = $entry['authentication']
+        BuildStrategy = $entry['buildStrategy']
     }
 }
 

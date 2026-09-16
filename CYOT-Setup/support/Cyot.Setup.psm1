@@ -82,8 +82,8 @@ function Read-CyotInput {
                     if ($Value -cnotmatch '^[a-z][a-z0-9]+$') { throw 'Use an Azure region name such as westus2.' }
                 }
                 'Prefix' {
-                    if ($Value -cnotmatch '^[a-z][a-z0-9]{1,9}$') {
-                        throw 'Use 2-10 lowercase letters or digits, starting with a letter (for example contoso).'
+                    if ($Value -cnotmatch '^[a-z][a-z0-9]{1,7}$') {
+                        throw 'Use 2-8 lowercase letters or digits, starting with a letter (for example contoso).'
                     }
                 }
                 'PackageUrl' {
@@ -112,7 +112,8 @@ function Read-CyotInput {
 
 function Get-CyotProvider {
     param(
-        [string] $AssetDirectory, [string] $SourceBaseUri, [string] $Provider, [switch] $NonInteractive,
+        [string] $AssetDirectory, [string] $SourceBaseUri, [string] $Provider, [string] $Channel,
+        [string] $EndpointRegion, [switch] $NonInteractive,
         [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$')]
         [string] $SourceRepository = 'Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample'
     )
@@ -138,11 +139,15 @@ function Get-CyotProvider {
     $path = Join-Path $AssetDirectory "providers/$($selected['file'])"
     Invoke-WebRequest -Uri "$SourceBaseUri/providers/$($selected['file'])" -OutFile $path -TimeoutSec 60 -MaximumRedirection 0
     $profile = Read-CyotJson $path
-    return ConvertTo-CyotProviderSettings -Profile $profile -Id $selected['id'] -DisplayName $selected['displayName']
+    return ConvertTo-CyotProviderSettings -Profile $profile -Id $selected['id'] -DisplayName $selected['displayName'] `
+        -Channel $Channel -EndpointRegion $EndpointRegion -NonInteractive:$NonInteractive
 }
 
 function ConvertTo-CyotProviderSettings {
-    param([Collections.IDictionary] $Profile, [string] $Id, [string] $DisplayName)
+    param(
+        [Collections.IDictionary] $Profile, [string] $Id, [string] $DisplayName,
+        [string] $Channel, [string] $EndpointRegion, [switch] $NonInteractive
+    )
 
     $issues = [Collections.Generic.List[string]]::new()
     $deployment = $Profile['deployment']
@@ -155,93 +160,121 @@ function ConvertTo-CyotProviderSettings {
         $issues.Add('the provider owner has not enabled this profile')
     }
     if ($deployment['providerName'] -cne $Id) { $issues.Add('deployment.providerName must match the catalog ID') }
-    try { $null = ConvertTo-CyotGuid $deployment['providerTenantId'] -AllowZero:$testConfiguration }
-    catch { $issues.Add('deployment.providerTenantId must identify the confirmed provider API token tenant') }
-    try { Assert-CyotHttpsUrl $deployment['providerEndpoint'] -AllowTestHost:$testConfiguration }
-    catch { $issues.Add('deployment.providerEndpoint must be the provider-approved endpoint/base URL for the deployed package') }
-    $scope = [string]$deployment['providerScope']
-    $resource = $scope -replace '/\.default$', ''
-    $resourceUri = $null
-    $resourceGuid = [Guid]::Empty
-    $validResource = ([Guid]::TryParse($resource, [ref] $resourceGuid) -and $resourceGuid -ne [Guid]::Empty) -or
-        ([Uri]::TryCreate($resource, [UriKind]::Absolute, [ref] $resourceUri) -and
-            $resourceUri.Scheme -in @('api', 'https') -and $resourceUri.Host -and
-            -not $resourceUri.UserInfo -and -not $resourceUri.Query -and -not $resourceUri.Fragment)
-    if (-not $validResource -or $scope -notmatch '/\.default$' -or $scope -match '[\s<>]') {
-        $issues.Add('deployment.providerScope must be the provider API resource followed by /.default')
+
+    $authentication = $deployment['authentication']
+    if ($authentication -isnot [Collections.IDictionary] -or $authentication['mode'] -notin @('apiKey', 'oauth')) {
+        $issues.Add('deployment.authentication.mode must be apiKey or oauth')
+    }
+    $authenticationMode = if ($authentication -is [Collections.IDictionary]) { [string]$authentication['mode'] } else { '' }
+    if ($authenticationMode -eq 'apiKey') {
+        foreach ($name in @('keyVaultSecretName', 'identityKeyVaultSecretName')) {
+            if ($authentication[$name] -cnotmatch '^[a-z0-9][a-z0-9-]{1,126}$') {
+                $issues.Add("deployment.authentication.$name must be a Key Vault secret name")
+            }
+        }
+    }
+    elseif ($authenticationMode -eq 'oauth') {
+        try { $null = ConvertTo-CyotGuid $authentication['tenantId'] -AllowZero:$testConfiguration }
+        catch { $issues.Add('deployment.authentication.tenantId must identify the provider OAuth tenant') }
     }
 
-    $metadata = $Profile['metadata']
-    if ($metadata -isnot [Collections.IDictionary] -or $metadata['endpoints'] -isnot [Collections.IDictionary]) {
-        throw "Provider '$DisplayName' is missing metadata.endpoints."
-    }
-    $timings = @()
-    $applicationIds = @()
-    foreach ($channel in @('sms', 'voice')) {
-        $endpoint = $metadata['endpoints'][$channel]
-        if ($endpoint -isnot [Collections.IDictionary]) { $issues.Add("metadata.endpoints.$channel is missing"); continue }
-        try { Assert-CyotHttpsUrl $endpoint['url'] -AllowTestHost:$testConfiguration }
-        catch { $issues.Add("metadata.endpoints.$channel.url must be a public HTTPS endpoint") }
-        try { $applicationIds += ConvertTo-CyotGuid $endpoint['appId'] -AllowZero:$testConfiguration }
-        catch { $issues.Add("metadata.endpoints.$channel.appId is missing or invalid") }
-        $timeout = $endpoint['timeoutMilliseconds']
-        $retry = $endpoint['retryIntervalSeconds']
-        if (($timeout -isnot [long] -and $timeout -isnot [int]) -or $timeout -lt 1 -or $timeout -gt 2500) {
-            $issues.Add("metadata.endpoints.$channel.timeoutMilliseconds must be an integer from 1 to 2500")
+    $routes = $deployment['routes']
+    if ($routes -isnot [Collections.IDictionary]) { throw "Provider '$DisplayName' is missing deployment.routes." }
+    foreach ($channelId in @('sms', 'voice')) {
+        if ($routes[$channelId] -isnot [Collections.IDictionary]) {
+            $issues.Add("deployment.routes.$channelId is missing")
+            continue
         }
-        if (($retry -isnot [long] -and $retry -isnot [int]) -or $retry -lt 0 -or $retry -gt 2147483) {
-            $issues.Add("metadata.endpoints.$channel.retryIntervalSeconds must be a nonnegative integer fitting Int32 milliseconds")
+        foreach ($regionId in @('global', 'eu')) {
+            $route = $routes[$channelId][$regionId]
+            if ($route -isnot [Collections.IDictionary]) {
+                $issues.Add("deployment.routes.$channelId.$regionId is missing")
+                continue
+            }
+            try { Assert-CyotHttpsUrl $route['endpoint'] -AllowTestHost:$testConfiguration }
+            catch { $issues.Add("deployment.routes.$channelId.$regionId.endpoint must be a public HTTPS endpoint") }
+            $timeout = $route['timeoutMilliseconds']
+            $retry = $route['retryIntervalSeconds']
+            if (($timeout -isnot [long] -and $timeout -isnot [int]) -or $timeout -lt 1 -or $timeout -gt 2500) {
+                $issues.Add("deployment.routes.$channelId.$regionId.timeoutMilliseconds must be an integer from 1 to 2500")
+            }
+            if (($retry -isnot [long] -and $retry -isnot [int]) -or $retry -lt 0 -or $retry -gt 2147483) {
+                $issues.Add("deployment.routes.$channelId.$regionId.retryIntervalSeconds must be a nonnegative integer fitting Int32 milliseconds")
+            }
+            if ($authenticationMode -eq 'oauth') {
+                try { $null = ConvertTo-CyotGuid $route['appId'] -AllowZero:$testConfiguration }
+                catch { $issues.Add("deployment.routes.$channelId.$regionId.appId must identify the provider API application") }
+                $scope = [string]$route['scope']
+                $resource = $scope -replace '/\.default$', ''
+                $resourceUri = $null
+                $resourceGuid = [Guid]::Empty
+                $validResource = ([Guid]::TryParse($resource, [ref] $resourceGuid) -and ($testConfiguration -or $resourceGuid -ne [Guid]::Empty)) -or
+                    ([Uri]::TryCreate($resource, [UriKind]::Absolute, [ref] $resourceUri) -and
+                        $resourceUri.Scheme -in @('api', 'https') -and $resourceUri.Host -and
+                        -not $resourceUri.UserInfo -and -not $resourceUri.Query -and -not $resourceUri.Fragment)
+                if (-not $validResource -or $scope -notmatch '/\.default$' -or $scope -match '[\s<>]') {
+                    $issues.Add("deployment.routes.$channelId.$regionId.scope must be the provider API resource followed by /.default")
+                }
+            }
         }
-        $timings += [pscustomobject]@{ Timeout = $timeout; Retry = $retry }
-    }
-    if (@($applicationIds | Select-Object -Unique).Count -gt 1) {
-        $issues.Add('the current endpoint package requires a shared provider API application/scope for SMS and voice')
-    }
-    if ($timings.Count -eq 2 -and ($timings[0].Timeout -ne $timings[1].Timeout -or $timings[0].Retry -ne $timings[1].Retry)) {
-        $issues.Add('the current endpoint package requires shared SMS/voice timeout and retry settings')
     }
     if ($issues.Count) {
         throw "Provider '$DisplayName' is not deployment-ready:`n - $($issues -join "`n - ")`nAsk the provider owner to complete its GitHub JSON. No Azure resources were changed."
+    }
+
+    $channelEntry = Select-CyotOption -Entries @(
+        @{ id = 'sms'; displayName = 'SMS' }
+        @{ id = 'voice'; displayName = 'Voice' }
+    ) -Name Channel -Value $Channel -NonInteractive:$NonInteractive
+    $regionEntry = Select-CyotOption -Entries @(
+        @{ id = 'global'; displayName = 'Global endpoint' }
+        @{ id = 'eu'; displayName = 'EU endpoint' }
+    ) -Name EndpointRegion -Value $EndpointRegion -NonInteractive:$NonInteractive
+    $selectedRoute = $routes[$channelEntry['id']][$regionEntry['id']]
+    $settings = @{
+        EPP_PROVIDER_NAME = $Id
+        EPP_PROVIDER_ENDPOINT = [string]$selectedRoute['endpoint']
+        EPP_PROVIDER_CHANNEL = [string]$channelEntry['id']
+        EPP_PROVIDER_ENDPOINT_REGION = [string]$regionEntry['id']
+        EPP_PROVIDER_TIMEOUT_MS = [string]$selectedRoute['timeoutMilliseconds']
+        EPP_PROVIDER_RETRY_INTERVAL_MS = [string]([long]$selectedRoute['retryIntervalSeconds'] * 1000)
+        EPP_PROVIDER_AUTH_MODE = $authenticationMode
+        EPP_PROVIDER_TEST_CONFIGURATION = $testConfiguration.ToString().ToLowerInvariant()
+    }
+    if ($authenticationMode -eq 'oauth') {
+        $settings.EPP_PROVIDER_TENANT_ID = ConvertTo-CyotGuid $authentication['tenantId'] -AllowZero:$testConfiguration
+        $settings.EPP_PROVIDER_SCOPE = [string]$selectedRoute['scope']
+        $settings.EPP_PROVIDER_APP_ID = [string]$selectedRoute['appId']
     }
     return [pscustomobject]@{
         Id = $Id
         DisplayName = $DisplayName
         Manifest = $Profile
         IsTestConfiguration = $testConfiguration
-        Settings = @{
-            EPP_PROVIDER_NAME = $Id
-            EPP_PROVIDER_ENDPOINT = [string]$deployment['providerEndpoint']
-            EPP_PROVIDER_TIMEOUT_MS = [string]$timings[0].Timeout
-            EPP_PROVIDER_RETRY_INTERVAL_MS = [string]([long]$timings[0].Retry * 1000)
-            EPP_PROVIDER_AUTH_MODE = 'apiKey'
-            EPP_PROVIDER_TENANT_ID = ConvertTo-CyotGuid $deployment['providerTenantId'] -AllowZero:$testConfiguration
-            EPP_PROVIDER_SCOPE = $scope
-            EPP_PROVIDER_SMS_ENDPOINT = [string]$metadata['endpoints']['sms']['url']
-            EPP_PROVIDER_VOICE_ENDPOINT = [string]$metadata['endpoints']['voice']['url']
-            EPP_PROVIDER_SMS_APP_ID = [string]$metadata['endpoints']['sms']['appId']
-            EPP_PROVIDER_VOICE_APP_ID = [string]$metadata['endpoints']['voice']['appId']
-            EPP_PROVIDER_TEST_CONFIGURATION = $testConfiguration.ToString().ToLowerInvariant()
-        }
+        Channel = [string]$channelEntry['id']
+        EndpointRegion = [string]$regionEntry['id']
+        AuthenticationMode = $authenticationMode
+        Settings = $settings
     }
 }
 
 function Get-CyotResourceNames {
     param([string] $SubscriptionId, [string] $ApplicationId, [string] $ResourcePrefix)
 
-    if ($ResourcePrefix -cnotmatch '^[a-z][a-z0-9]{1,9}$') { throw 'ResourcePrefix must be 2-10 lowercase letters/digits, starting with a letter.' }
+    if ($ResourcePrefix -cnotmatch '^[a-z][a-z0-9]{1,7}$') { throw 'ResourcePrefix must be 2-8 lowercase letters/digits, starting with a letter.' }
     $seed = "$(ConvertTo-CyotGuid $SubscriptionId)|$(ConvertTo-CyotGuid $ApplicationId)|$ResourcePrefix"
     $sha = [Security.Cryptography.SHA256]::Create()
     try { $suffix = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($seed))) -replace '-', '').Substring(0, 8).ToLowerInvariant() }
     finally { $sha.Dispose() }
     return [ordered]@{
-        resourceGroup = "$ResourcePrefix-rg-$suffix"
-        functionApp = "$ResourcePrefix-func-$suffix"
-        storageAccount = "${ResourcePrefix}sa$suffix"
-        keyVault = "$ResourcePrefix-kv-$suffix"
-        hostingPlan = "$ResourcePrefix-plan-$suffix"
-        logAnalytics = "$ResourcePrefix-logs-$suffix"
-        applicationInsights = "$ResourcePrefix-insights-$suffix"
-        outboundIdentity = "$ResourcePrefix-outbound-$suffix"
+        resourceGroup = "$ResourcePrefix-epp-rg-$suffix"
+        functionApp = "$ResourcePrefix-epp-func-$suffix"
+        storageAccount = "${ResourcePrefix}eppsa$suffix"
+        keyVault = "$ResourcePrefix-epp-kv-$suffix"
+        hostingPlan = "$ResourcePrefix-epp-plan-$suffix"
+        logAnalytics = "$ResourcePrefix-epp-logs-$suffix"
+        applicationInsights = "$ResourcePrefix-epp-insights-$suffix"
+        outboundIdentity = "$ResourcePrefix-epp-outbound-$suffix"
     }
 }
 
@@ -549,8 +582,17 @@ function Show-CyotPlan {
     Write-Host "Location:     $($Inputs.Location)"
     Write-Host "Language:     $($Inputs.Language) ($($Inputs.BuildStrategy))"
     Write-Host "Provider:     $($ProviderConfiguration.DisplayName)"
+    Write-Host "Channel:      $($ProviderConfiguration.Channel)"
+    Write-Host "Endpoint:     $($ProviderConfiguration.EndpointRegion)"
+    Write-Host "Provider auth: $($ProviderConfiguration.AuthenticationMode)"
     Write-Host "API endpoint: $($ProviderConfiguration.Settings.EPP_PROVIDER_ENDPOINT)"
-    Write-Host "Provider API: $($ProviderConfiguration.Settings.EPP_PROVIDER_TENANT_ID) / $($ProviderConfiguration.Settings.EPP_PROVIDER_SCOPE)"
+    if ($ProviderConfiguration.AuthenticationMode -eq 'oauth') {
+        Write-Host "Provider API: $($ProviderConfiguration.Settings.EPP_PROVIDER_TENANT_ID) / $($ProviderConfiguration.Settings.EPP_PROVIDER_SCOPE)"
+    }
+    else {
+        $auth = $ProviderConfiguration.Manifest.deployment.authentication
+        Write-Host "Key Vault:    $($auth.keyVaultSecretName), $($auth.identityKeyVaultSecretName)"
+    }
     Write-Host "Timeout:      $($ProviderConfiguration.Settings.EPP_PROVIDER_TIMEOUT_MS) ms"
     Write-Host "Retry:        $($ProviderConfiguration.Settings.EPP_PROVIDER_RETRY_INTERVAL_MS) ms (package-dependent; not a retry guarantee)"
     Write-Host "Package:      $($Inputs.PackageUrl)"
@@ -565,10 +607,10 @@ function Show-CyotPlan {
     Write-Host 'System identity: Storage Blob Data Owner, Queue/Table Data Contributor, Key Vault Secrets User, Monitoring Metrics Publisher.'
     Write-Host "Azure operator $($Context.OperatorId): Key Vault Secrets Officer and Storage Blob Data Contributor, scoped to these resources."
     Write-Host "Graph operator $($Context.GraphAccount): append the endpoint identifier URI and publish a public encryption certificate."
-    if ($Inputs.ProviderAuthentication -eq 'ests') {
-        Write-Host 'Add an outbound managed-identity federated credential to the EXISTING application.'
+    if ($Inputs.ProviderAuthentication -eq 'oauth') {
+        Write-Host 'Soprano OAuth: add an outbound managed-identity federated credential to the EXISTING application.'
     }
-    else { Write-Host 'The selected API-key sample does not use outbound Entra federation; no federated application credential is created.' }
+    else { Write-Host 'Telesign API key: no outbound federated application credential is created.' }
     Write-Host "Create/reuse an RSA certificate in CurrentUser\My; store its private key as phone-provider-decryption-key in the new vault."
     Write-Host 'Deploy the verified package, synchronize triggers, and enable HTTPS ingress guarded by Easy Auth.'
     Write-Host 'Premium EP1, storage, and telemetry incur charges. Reruns can restart the Function. No automatic rollback or deletion.' -ForegroundColor Yellow
@@ -866,7 +908,7 @@ function Invoke-CyotDeployment {
     Set-CyotPrivateKey -Certificate $certificate -KeyId $keyId -VaultName $Names.keyVault `
         -SubscriptionId $Inputs.SubscriptionId -Directory $AssetDirectory
     Set-CyotApplicationEndpoint -Inputs $Inputs -Context $Context -Outputs $outputs -Certificate $certificate -KeyId $keyId `
-        -ConfigureFederation:($Inputs.ProviderAuthentication -eq 'ests')
+        -ConfigureFederation:($Inputs.ProviderAuthentication -eq 'oauth')
     $siteId = "/subscriptions/$($Inputs.SubscriptionId)/resourceGroups/$($Names.resourceGroup)/providers/Microsoft.Web/sites/$($Names.functionApp)"
     $ingressOpened = $false
     try {
@@ -911,7 +953,9 @@ function Invoke-CyotDeployment {
     }
     $result = [ordered]@{
         tenantId = $Inputs.TenantId; subscriptionId = $Inputs.SubscriptionId; applicationId = $Inputs.ApplicationId
-        provider = $ProviderConfiguration.Id; resourcePrefix = $Inputs.ResourcePrefix; resources = $Names
+        provider = $ProviderConfiguration.Id; channel = $ProviderConfiguration.Channel
+        endpointRegion = $ProviderConfiguration.EndpointRegion; providerAuthentication = $Inputs.ProviderAuthentication
+        resourcePrefix = $Inputs.ResourcePrefix; resources = $Names
         language = $Inputs.Language; testConfiguration = $ProviderConfiguration.IsTestConfiguration
         endpointUrl = $outputs.endpointUrl.value; identifierUri = $outputs.identifierUri.value
         encryptionKeyId = $keyId; certificateThumbprint = $certificate.Thumbprint
@@ -934,7 +978,8 @@ function Invoke-CyotSetup {
     [CmdletBinding()]
     param(
         [string] $TenantId, [string] $SubscriptionId, [string] $ApplicationId, [string] $Location,
-        [string] $Provider, [string] $ProviderAccountName, [string] $ResourcePrefix,
+        [string] $Provider, [string] $Channel, [string] $EndpointRegion,
+        [string] $ProviderAccountName, [string] $ResourcePrefix,
         [string] $Language,
         [string] $OutputDirectory, [string] $AssetDirectory, [string] $SourceBaseUri,
         [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$')]
@@ -955,11 +1000,11 @@ function Invoke-CyotSetup {
     $inputs.Language = $selection.Id
     $inputs.PackageUrl = $selection.Url
     $inputs.BuildStrategy = $selection.BuildStrategy
-    $inputs.ProviderAuthentication = $selection.Authentication
 
     $providerConfiguration = Get-CyotProvider -AssetDirectory $AssetDirectory -SourceBaseUri $SourceBaseUri -Provider $Provider `
-        -NonInteractive:$NonInteractive -SourceRepository $SourceRepository
-    $inputs.ResourcePrefix = Read-CyotInput ResourcePrefix $ResourcePrefix -Kind Prefix -Hint '2-10 lowercase letters/digits; all resource names start with this' -NonInteractive:$NonInteractive
+        -Channel $Channel -EndpointRegion $EndpointRegion -NonInteractive:$NonInteractive -SourceRepository $SourceRepository
+    $inputs.ProviderAuthentication = $providerConfiguration.AuthenticationMode
+    $inputs.ResourcePrefix = Read-CyotInput ResourcePrefix $ResourcePrefix -Kind Prefix -Hint '2-8 lowercase letters/digits; resource names add epp after this prefix' -NonInteractive:$NonInteractive
     $names = Get-CyotResourceNames -SubscriptionId $inputs.SubscriptionId -ApplicationId $inputs.ApplicationId -ResourcePrefix $inputs.ResourcePrefix
 
     Write-Host "`nChecking prerequisites and the selected Azure context (no resource changes)..." -ForegroundColor Cyan

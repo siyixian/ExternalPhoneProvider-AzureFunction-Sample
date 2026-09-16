@@ -71,14 +71,16 @@ arguments from saved commands.
 ## Provider settings are dummy values
 
 This is intentional for deployment testing. Both JSON profiles explicitly use
-`deployment.testConfiguration: true`. Zero GUIDs and `example.invalid` URLs are written into the
-actual Function App environment, with `EPP_PROVIDER_TEST_CONFIGURATION=true`.
-Telesign's supplied channel URLs, timings, and publisher metadata are retained.
+`deployment.testConfiguration: true`. Every SMS/voice and Global/EU route is complete; zero GUIDs
+and `example.invalid` URLs are written into the actual Function App environment when that route is
+selected, with `EPP_PROVIDER_TEST_CONFIGURATION=true`. Telesign's supplied global channel URLs,
+timings, and publisher metadata are retained.
 
-The script can deploy code with these values, but they cannot deliver real SMS/voice messages.
-Update the provider-owned profile and provision the adapter's credentials in Key Vault before
-live use. The API-key sample packages do not turn into outbound Entra-token clients merely because
-tenant/scope/app-ID values are present in settings. See [provider ownership](../providers/README.md).
+The script can deploy code with these values, but dummy routes cannot deliver real messages.
+Update the provider-owned profile before live use. Telesign requires its API-key secrets in Key
+Vault. Soprano uses the selected OAuth tenant/scope/app ID and outbound managed-identity federation;
+provider consent and API roles remain external onboarding steps. See
+[provider ownership](../providers/README.md).
 
 ## A checksum or package download fails
 

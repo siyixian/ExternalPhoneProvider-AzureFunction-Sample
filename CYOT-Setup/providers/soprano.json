@@ -4,7 +4,7 @@
     "name": "soprano-cyot",
     "displayName": "Soprano",
     "version": "0.1.0",
-    "description": "DUMMY provider configuration for testing deployment and environment settings.",
+    "description": "OAuth-based Soprano CYOT provider configuration.",
     "category": "Telephony",
     "previewState": "TestConfiguration"
   },
@@ -12,34 +12,51 @@
     "tenantId": "00000000-0000-0000-0000-000000000000"
   },
   "metadata": {
-    "endpoints": {
-      "sms": {
-        "url": "https://soprano.example.invalid/sms",
-        "appId": "00000000-0000-0000-0000-000000000000",
-        "timeoutMilliseconds": 1500,
-        "retryIntervalSeconds": 30
-      },
-      "voice": {
-        "url": "https://soprano.example.invalid/voice",
-        "appId": "00000000-0000-0000-0000-000000000000",
-        "timeoutMilliseconds": 1500,
-        "retryIntervalSeconds": 30
-      },
-      "certification": {
-        "url": "https://soprano.example.invalid/ping",
-        "appId": "00000000-0000-0000-0000-000000000000"
-      }
-    },
-    "supportedChannels": ["sms", "voice"]
+    "supportedChannels": ["sms", "voice"],
+    "supportedRegions": ["global", "eu"]
   },
   "deployment": {
     "enabled": true,
     "testConfiguration": true,
     "providerName": "soprano",
-    "providerTenantId": "00000000-0000-0000-0000-000000000000",
-    "providerScope": "api://00000000-0000-0000-0000-000000000000/.default",
-    "providerEndpoint": "https://soprano.example.invalid",
-    "placeholderFields": ["providerTenantId", "providerScope", "providerEndpoint", "metadata.endpoints"],
-    "note": "All Soprano endpoints, API IDs, and timing values are DUMMY test defaults. Replace them with provider-approved values and set testConfiguration to false before live delivery."
+    "authentication": {
+      "mode": "oauth",
+      "tenantId": "00000000-0000-0000-0000-000000000000"
+    },
+    "routes": {
+      "sms": {
+        "global": {
+          "endpoint": "https://soprano-global.example.invalid/sms",
+          "appId": "00000000-0000-0000-0000-000000000000",
+          "scope": "api://00000000-0000-0000-0000-000000000000/.default",
+          "timeoutMilliseconds": 1500,
+          "retryIntervalSeconds": 30
+        },
+        "eu": {
+          "endpoint": "https://soprano-eu.example.invalid/sms",
+          "appId": "00000000-0000-0000-0000-000000000000",
+          "scope": "api://00000000-0000-0000-0000-000000000000/.default",
+          "timeoutMilliseconds": 1500,
+          "retryIntervalSeconds": 30
+        }
+      },
+      "voice": {
+        "global": {
+          "endpoint": "https://soprano-global.example.invalid/voice",
+          "appId": "00000000-0000-0000-0000-000000000000",
+          "scope": "api://00000000-0000-0000-0000-000000000000/.default",
+          "timeoutMilliseconds": 1500,
+          "retryIntervalSeconds": 30
+        },
+        "eu": {
+          "endpoint": "https://soprano-eu.example.invalid/voice",
+          "appId": "00000000-0000-0000-0000-000000000000",
+          "scope": "api://00000000-0000-0000-0000-000000000000/.default",
+          "timeoutMilliseconds": 1500,
+          "retryIntervalSeconds": 30
+        }
+      }
+    },
+    "note": "All Soprano tenant, endpoint, application ID, scope, and timing values are explicit test values until Soprano supplies the production profile."
   }
 }

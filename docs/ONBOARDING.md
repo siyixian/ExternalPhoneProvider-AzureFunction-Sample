@@ -7,10 +7,10 @@ define required credentials and options. No provider is preferred or selected by
 
 ## 1. Select and configure an adapter
 
-Choose a registered adapter for the selected provider and an account supporting the required channels.
-Set `EPP_PROVIDER_NAME` to its actual manifest id (`<adapter-id>` is only a placeholder), and configure
-its matching `EPP_PROVIDER_ENDPOINT` and required options. One provider is active per deployment;
-request fields cannot change it. Purchasing or activating a subscription does not install an adapter.
+Choose a registered adapter for the selected provider, channel, and endpoint region. Set
+`EPP_PROVIDER_NAME` to its actual manifest id (`<adapter-id>` is only a placeholder), and configure
+the complete selected request URL in `EPP_PROVIDER_ENDPOINT`. One provider and channel route are
+active per guided deployment; request fields cannot change them.
 
 Store credentials under the Key Vault secret names declared by the selected adapter's manifest, not
 in code or app settings. Grant the Function's managed identity *Key Vault Secrets User* access at the
@@ -23,25 +23,20 @@ The [CYOT Step 2 setup](../CYOT-Setup/docs/README.md) uses one downloadable laun
 language/provider catalogs, and one Bicep deployment approval. It downloads the selected language
 ZIP, verifies its published checksum automatically, builds .NET for Linux or requests Azure remote
 build for Python, and deploys the ready-to-run result. Application registration and policy activation
-are manual. The three published packages use the **API-key** implementations documented here.
-Provider tenant/scope/channel-app-ID settings can be stored for onboarding, but these samples do
-not consume them for outbound Entra authentication. No outbound application federation is created
-for these API-key packages.
+are manual. Authentication is provider-owned: Telesign uses API keys; Soprano uses OAuth
+client-assertion exchange and creates the disclosed outbound federated identity credential.
 
-When deploying these API-key implementations separately, provision the encryption-key secret and
-the selected provider's API credentials. Before live delivery, complete these steps:
+Before live delivery, complete these steps:
 
 1. Set `KEY_VAULT_URL` to the vault containing the provider credentials. When it is the vault created
 	by setup, use that vault's `vaultUri`; otherwise explicitly select the credential vault and grant
 	the Function identity read access there. An encryption-key reference does not configure this client.
-2. Store the API key under the selected manifest's `keyVaultSecretName` (`key_vault_secret_name` in
-	Python). If the manifest also declares `identityKeyVaultSecretName`
-	(`identity_key_vault_secret_name`), store the matching API/customer ID as a separate secret.
-	`EPP_PROVIDER_ACCOUNT_NAME` is a sender/account option, **not** that credential ID or the API key.
-	Keep secret values out of parameters, console transcripts and checked-in settings.
-3. Give `EPP_PROVIDER_ENDPOINT` the **base URL expected by the adapter**. Bundled adapters append the
-	channel-specific API path. Do not pass an already complete send URL unless an adapter explicitly
-	expects it. Use the same account/environment for the endpoint and its credential pair.
+2. For Telesign, store the API key and customer ID under the manifest's exact secret names.
+	`EPP_PROVIDER_ACCOUNT_NAME` is a sender/account option, **not** either credential. For Soprano,
+	complete provider consent/application-role onboarding for the existing multitenant application;
+	the Function stores no Soprano client secret.
+3. Give `EPP_PROVIDER_ENDPOINT` the complete provider-approved URL for the selected channel and
+	Global/EU region. The Telesign and Soprano adapters use it exactly and do not append a route.
 4. Supply any additional options read by the selected adapter. Registering a provider does not make
 	every account option or channel automatically available.
 
@@ -50,7 +45,11 @@ The script already writes the correct `EPP_` names; no variable-prefix translati
 | Setup value | Current application behavior |
 |---|---|
 | `EPP_PROVIDER_NAME` | Selects one registered adapter; no implicit default. |
-| `EPP_PROVIDER_ENDPOINT` | Base URL, with the final send path built by the adapter. |
+| `EPP_PROVIDER_ENDPOINT` | Complete selected provider request URL. |
+| `EPP_PROVIDER_CHANNEL` | Restricts live delivery to the selected `sms` or `voice` route. |
+| `EPP_PROVIDER_ENDPOINT_REGION` | Records the selected `global` or `eu` route. |
+| `EPP_PROVIDER_AUTH_MODE` | `apiKey` for Telesign; `oauth` for Soprano. |
+| `EPP_PROVIDER_TENANT_ID`, `EPP_PROVIDER_SCOPE` | Soprano OAuth target tenant and scope. |
 | `EPP_PROVIDER_TIMEOUT_MS` | Default 1500 ms; positive decimal values are capped at 2500 ms. Zero/invalid values use the default, not an infinite timeout. |
 | `EPP_PROVIDER_RETRY_INTERVAL_MS` | Not consumed. Calls are not automatically retried; writing this setting does not enable retries. |
 | `EPP_PROVIDER_ACCOUNT_NAME` | Adapter-specific sender/account option, separate from credential secrets. |
@@ -77,10 +76,8 @@ The script alone does not make this implementation conform to every Preview 1 re
 
 The guided deployment includes explicitly labelled dummy provider values for configuration testing.
 These values are written into the actual Function App environment; they do not establish provider
-connectivity. It does not derive a real provider base URL from different SMS and voice URLs.
-Replace the test values with provider-approved adapter settings and provision the required Key Vault
-credentials before live delivery. Verify the deployed security checks separately; the application
-tests do not validate those control-plane operations.
+connectivity. Replace the selected route with provider-approved settings, provision Telesign Key
+Vault credentials or Soprano provider consent as applicable, and verify deployed security controls.
 
 ## 2. Provision encryption and deployment trust
 

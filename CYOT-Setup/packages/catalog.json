@@ -4,26 +4,23 @@
     {
       "id": "javascript",
       "displayName": "JavaScript",
-      "url": "https://github.com/Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample/releases/download/epp-packages-preview-20260914/epp-javascript.zip",
-      "checksumsUrl": "https://github.com/Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample/releases/download/epp-packages-preview-20260914/SHA256SUMS.txt",
-      "buildStrategy": "ready",
-      "authentication": "apiKey"
+      "url": "https://github.com/siyixian/ExternalPhoneProvider-AzureFunction-Sample/releases/download/epp-provider-auth-preview-20260915/epp-javascript.zip",
+      "checksumsUrl": "https://github.com/siyixian/ExternalPhoneProvider-AzureFunction-Sample/releases/download/epp-provider-auth-preview-20260915/SHA256SUMS.txt",
+      "buildStrategy": "ready"
     },
     {
       "id": "dotnet",
       "displayName": ".NET",
-      "url": "https://github.com/Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample/releases/download/epp-dotnet-source-preview-20260915/epp-dotnet-source.zip",
-      "checksumsUrl": "https://github.com/Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample/releases/download/epp-dotnet-source-preview-20260915/SHA256SUMS.txt",
-      "buildStrategy": "dotnet-publish",
-      "authentication": "apiKey"
+      "url": "https://github.com/siyixian/ExternalPhoneProvider-AzureFunction-Sample/releases/download/epp-provider-auth-preview-20260915/epp-dotnet-source.zip",
+      "checksumsUrl": "https://github.com/siyixian/ExternalPhoneProvider-AzureFunction-Sample/releases/download/epp-provider-auth-preview-20260915/SHA256SUMS.txt",
+      "buildStrategy": "dotnet-publish"
     },
     {
       "id": "python",
       "displayName": "Python",
-      "url": "https://github.com/Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample/releases/download/epp-packages-preview-20260914/epp-python-source.zip",
-      "checksumsUrl": "https://github.com/Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample/releases/download/epp-packages-preview-20260914/SHA256SUMS.txt",
-      "buildStrategy": "remote-build",
-      "authentication": "apiKey"
+      "url": "https://github.com/siyixian/ExternalPhoneProvider-AzureFunction-Sample/releases/download/epp-provider-auth-preview-20260915/epp-python-source.zip",
+      "checksumsUrl": "https://github.com/siyixian/ExternalPhoneProvider-AzureFunction-Sample/releases/download/epp-provider-auth-preview-20260915/SHA256SUMS.txt",
+      "buildStrategy": "remote-build"
     }
   ]
 }

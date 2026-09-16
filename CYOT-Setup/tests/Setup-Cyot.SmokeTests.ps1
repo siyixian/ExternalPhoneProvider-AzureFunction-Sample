@@ -9,7 +9,7 @@ $entryPoint = Join-Path $packageRoot 'Setup-Cyot.ps1'
 $modulePath = Join-Path $packageRoot 'support/Cyot.Setup.psm1'
 $packageHelperPath = Join-Path $packageRoot 'support/Cyot.Packages.ps1'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) "cyot-tests-$([Guid]::NewGuid().ToString('N'))"
-$source = 'https://raw.githubusercontent.com/Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/CYOT-Setup'
+$source = 'https://raw.githubusercontent.com/siyixian/ExternalPhoneProvider-AzureFunction-Sample/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/CYOT-Setup'
 $failures = [Collections.Generic.List[string]]::new()
 $passed = 0
 
@@ -43,11 +43,11 @@ function New-ValidProfile {
     $profile = Get-Content (Join-Path $packageRoot 'providers/telesign.json') -Raw | ConvertFrom-Json -AsHashtable
     $profile.deployment.enabled = $true
     $profile.deployment.testConfiguration = $false
-    $profile.deployment.providerTenantId = '44444444-4444-4444-4444-444444444444'
-    $profile.deployment.providerScope = 'api://55555555-5555-5555-5555-555555555555/.default'
-    $profile.deployment.providerEndpoint = 'https://provider.contoso.com/cyot'
-    $profile.metadata.endpoints.sms.appId = '55555555-5555-5555-5555-555555555555'
-    $profile.metadata.endpoints.voice.appId = '55555555-5555-5555-5555-555555555555'
+    foreach ($channel in @('sms', 'voice')) {
+        foreach ($region in @('global', 'eu')) {
+            $profile.deployment.routes[$channel][$region].endpoint = "https://provider.contoso.com/$channel/$region"
+        }
+    }
     return $profile
 }
 
@@ -147,9 +147,11 @@ function Invoke-FlowFixture {
         TenantId = '11111111-1111-1111-1111-111111111111'
         SubscriptionId = '22222222-2222-2222-2222-222222222222'
         ApplicationId = '33333333-3333-3333-3333-333333333333'
-        Location = 'westus2'; Provider = 'telesign'; ProviderAccountName = 'test-sender'; ResourcePrefix = 'contoso'
+        Location = 'westus2'; Provider = 'telesign'; Channel = 'sms'; EndpointRegion = 'global'
+        ProviderAccountName = 'test-sender'; ResourcePrefix = 'contoso'
         Language = 'javascript'
         OutputDirectory = Join-Path $directory 'output'; AssetDirectory = $directory; SourceBaseUri = $source
+        SourceRepository = 'siyixian/ExternalPhoneProvider-AzureFunction-Sample'
     }
     foreach ($name in $Omit) { $inputs.Remove($name) }
     foreach ($name in $Overrides.Keys) { $inputs[$name] = $Overrides[$name] }
@@ -545,7 +547,8 @@ try {
         $run = Invoke-LauncherFixture
         Assert-True (-not $run.Error -and $run.Result.Invoked) "Launcher failed: $($run.Error)"
         Assert-True ($run.ApiCalls -eq 1 -and $run.Downloads.Count -eq 6) 'Unexpected bootstrap requests.'
-        Assert-True (@($run.Downloads | Where-Object { $_.Uri -notlike "$source/*" }).Count -eq 0) 'Mixed or untrusted source revisions.'
+        $expected = "https://raw.githubusercontent.com/Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample/$('a' * 40)/CYOT-Setup/"
+        Assert-True (@($run.Downloads | Where-Object { -not $_.Uri.StartsWith($expected) }).Count -eq 0) 'Mixed or untrusted source revisions.'
         Assert-True ($run.Result.Prefix -eq 'contoso' -and $run.Result.Tenant -like '11111111-*') 'Parameters were not forwarded.'
         Assert-True (@($run.Downloads | Where-Object { Test-Path -LiteralPath $_.Path }).Count -eq 0) 'Temporary downloads survived completion.'
     }
@@ -593,46 +596,47 @@ try {
     $module = Import-Module $modulePath -Force -PassThru
     try {
         Test-Case 'Telesign manifest retains exact channel URLs, timings, and publisher tenant' {
-            $profile = New-ValidProfile
+            $profile = Get-Content (Join-Path $packageRoot 'providers/telesign.json') -Raw | ConvertFrom-Json -AsHashtable
             Assert-True ($profile.publisher.tenantId -eq 'd818b557-ea1c-4070-a3f1-928330b7a30c') 'Publisher was changed.'
-            Assert-True ($profile.metadata.endpoints.sms.url -ceq 'https://rest-ww.telesign.com/integration/microsoft-cyot/sms') 'SMS URL was changed.'
-            Assert-True ($profile.metadata.endpoints.voice.url -ceq 'https://rest-ww.telesign.com/integration/microsoft-cyot/voice') 'Voice URL was changed.'
-            $result = & $module { param($profile) ConvertTo-CyotProviderSettings $profile telesign Telesign } $profile
+            Assert-True ($profile.deployment.routes.sms.global.endpoint -ceq 'https://rest-ww.telesign.com/integration/microsoft-cyot/sms') 'SMS URL was changed.'
+            Assert-True ($profile.deployment.routes.voice.global.endpoint -ceq 'https://rest-ww.telesign.com/integration/microsoft-cyot/voice') 'Voice URL was changed.'
+            $result = & $module { param($profile) ConvertTo-CyotProviderSettings $profile telesign Telesign sms global -NonInteractive } $profile
             Assert-True ($result.Settings.EPP_PROVIDER_TIMEOUT_MS -ceq '1500' -and $result.Settings.EPP_PROVIDER_RETRY_INTERVAL_MS -ceq '30000') 'Seconds were not converted to milliseconds exactly.'
-            Assert-True ($result.Settings.EPP_PROVIDER_ENDPOINT -ceq 'https://provider.contoso.com/cyot') 'A channel URL was guessed instead of the approved mapping.'
+            Assert-True ($result.Settings.EPP_PROVIDER_ENDPOINT -ceq 'https://rest-ww.telesign.com/integration/microsoft-cyot/sms') 'The selected channel/region endpoint was not used exactly.'
         }
         foreach ($provider in @('telesign', 'soprano')) {
             Test-Case "$provider test values are explicit real app-setting strings" {
                 $profile = Get-Content (Join-Path $packageRoot "providers/$provider.json") -Raw | ConvertFrom-Json -AsHashtable
-                $result = & $module { param($p, $id) ConvertTo-CyotProviderSettings $p $id $id } $profile $provider
+                $result = & $module { param($p, $id) ConvertTo-CyotProviderSettings $p $id $id sms global -NonInteractive } $profile $provider
                 Assert-True ($result.IsTestConfiguration -and $result.Settings.EPP_PROVIDER_TEST_CONFIGURATION -ceq 'true') 'Dummy configuration was not labelled.'
-                Assert-True ($result.Settings.EPP_PROVIDER_TENANT_ID -ceq '00000000-0000-0000-0000-000000000000') 'Dummy tenant was discarded.'
-                Assert-True ($result.Settings.EPP_PROVIDER_ENDPOINT -ceq "https://$provider.example.invalid") 'Dummy endpoint was discarded.'
+                Assert-True ($result.Settings.EPP_PROVIDER_CHANNEL -ceq 'sms' -and $result.Settings.EPP_PROVIDER_ENDPOINT_REGION -ceq 'global') 'Selected route labels were not written.'
+                $expectedAuth = if ($provider -eq 'soprano') { 'oauth' } else { 'apiKey' }
+                Assert-True ($result.AuthenticationMode -ceq $expectedAuth -and $result.Settings.EPP_PROVIDER_AUTH_MODE -ceq $expectedAuth) 'Provider authentication was not profile-owned.'
+                Assert-True (-not $profile.deployment.Contains('placeholderFields')) 'The provider profile still contains placeholderFields.'
                 $profile.deployment.testConfiguration = $false
-                Assert-Throws { & $module { param($p, $id) ConvertTo-CyotProviderSettings $p $id $id } $profile $provider } 'not deployment-ready'
+                Assert-Throws { & $module { param($p, $id) ConvertTo-CyotProviderSettings $p $id $id sms global -NonInteractive } $profile $provider } 'not deployment-ready'
             }
         }
         foreach ($invalid in @(-1, 2147484, '30', 1.5)) {
             Test-Case "Reject invalid retry seconds '$invalid'" {
                 $profile = New-ValidProfile
-                $profile.metadata.endpoints.sms.retryIntervalSeconds = $invalid
-                Assert-Throws { & $module { param($p) ConvertTo-CyotProviderSettings $p telesign Telesign } $profile } 'retryIntervalSeconds'
+                $profile.deployment.routes.sms.global.retryIntervalSeconds = $invalid
+                Assert-Throws { & $module { param($p) ConvertTo-CyotProviderSettings $p telesign Telesign sms global -NonInteractive } $profile } 'retryIntervalSeconds'
             }
         }
         foreach ($invalid in @(0, 2501, '1500')) {
             Test-Case "Reject invalid timeout '$invalid'" {
                 $profile = New-ValidProfile
-                $profile.metadata.endpoints.sms.timeoutMilliseconds = $invalid
-                Assert-Throws { & $module { param($p) ConvertTo-CyotProviderSettings $p telesign Telesign } $profile } 'timeoutMilliseconds'
+                $profile.deployment.routes.sms.global.timeoutMilliseconds = $invalid
+                Assert-Throws { & $module { param($p) ConvertTo-CyotProviderSettings $p telesign Telesign sms global -NonInteractive } $profile } 'timeoutMilliseconds'
             }
         }
-        Test-Case 'Do not flatten different per-channel timings or audiences' {
+        Test-Case 'Channel and endpoint-region selections resolve independently' {
             $profile = New-ValidProfile
-            $profile.metadata.endpoints.voice.retryIntervalSeconds = 31
-            Assert-Throws { & $module { param($p) ConvertTo-CyotProviderSettings $p telesign Telesign } $profile } 'shared SMS/voice'
-            $profile.metadata.endpoints.voice.retryIntervalSeconds = 30
-            $profile.metadata.endpoints.voice.appId = '99999999-9999-9999-9999-999999999999'
-            Assert-Throws { & $module { param($p) ConvertTo-CyotProviderSettings $p telesign Telesign } $profile } 'shared provider API'
+            $profile.deployment.routes.voice.eu.retryIntervalSeconds = 31
+            $result = & $module { param($p) ConvertTo-CyotProviderSettings $p telesign Telesign voice eu -NonInteractive } $profile
+            Assert-True ($result.Settings.EPP_PROVIDER_ENDPOINT -ceq 'https://provider.contoso.com/voice/eu' -and
+                $result.Settings.EPP_PROVIDER_RETRY_INTERVAL_MS -ceq '31000') 'The selected route was flattened with another channel or region.'
         }
         foreach ($url in @('http://provider.contoso.com', 'https://127.0.0.1', 'https://localhost', 'https://provider.contoso.com?token=secret', 'https://user:pass@provider.contoso.com', 'https://provider.example.com')) {
             Test-Case "Reject unsafe or placeholder URL $($url.Split('?')[0])" {
@@ -640,14 +644,15 @@ try {
             }
         }
         Test-Case 'Resource names are stable, prefix-based, and valid at both length boundaries' {
-            foreach ($prefix in @('ab', 'abcdefghij')) {
+            foreach ($prefix in @('ab', 'abcdefgh')) {
                 $names = & $module { param($p) Get-CyotResourceNames '11111111-1111-1111-1111-111111111111' '22222222-2222-2222-2222-222222222222' $p } $prefix
                 $again = & $module { param($p) Get-CyotResourceNames '11111111-1111-1111-1111-111111111111' '22222222-2222-2222-2222-222222222222' $p } $prefix
                 Assert-True (($names | ConvertTo-Json -Compress) -ceq ($again | ConvertTo-Json -Compress)) 'Names changed between runs.'
                 Assert-True (@($names.Values | Where-Object { -not $_.StartsWith($prefix) }).Count -eq 0) 'A resource lost its prefix.'
+                Assert-True (@($names.Values | Where-Object { $_ -notmatch "^$prefix-?epp" }).Count -eq 0) 'A resource name did not add the epp marker after the customer prefix.'
                 Assert-True ($names.storageAccount -cmatch '^[a-z0-9]{3,24}$' -and $names.keyVault.Length -le 24 -and $names.functionApp.Length -le 60) 'Invalid Azure name lengths.'
             }
-            Assert-Throws { & $module { Get-CyotResourceNames '11111111-1111-1111-1111-111111111111' '22222222-2222-2222-2222-222222222222' 'abcdefghijkl' } } 'ResourcePrefix'
+            Assert-Throws { & $module { Get-CyotResourceNames '11111111-1111-1111-1111-111111111111' '22222222-2222-2222-2222-222222222222' 'abcdefghi' } } 'ResourcePrefix'
         }
         Test-Case 'Source and catalog cannot redirect support execution or traverse directories' {
             Assert-Throws { & $module { param($root) Get-CyotProvider $root 'https://untrusted.contoso.com' telesign } $packageRoot } 'commit-pinned'
@@ -655,8 +660,18 @@ try {
             New-Item -ItemType Directory -Path (Join-Path $catalogDirectory 'providers') -Force | Out-Null
             '{"schemaVersion":1,"providers":[{"id":"telesign","displayName":"Telesign","file":"../evil.ps1"}]}' |
                 Set-Content (Join-Path $catalogDirectory 'providers/catalog.json')
-            Assert-Throws { & $module { param($root, $src) Get-CyotProvider $root $src telesign } $catalogDirectory $source } 'invalid or duplicate'
-            Assert-Throws { & $module { param($root, $src) Get-CyotProvider $root $src invalid } $packageRoot $source } 'telesign, soprano'
+            Assert-Throws {
+                & $module {
+                    param($root, $src)
+                    Get-CyotProvider $root $src telesign -SourceRepository 'siyixian/ExternalPhoneProvider-AzureFunction-Sample'
+                } $catalogDirectory $source
+            } 'invalid or duplicate'
+            Assert-Throws {
+                & $module {
+                    param($root, $src)
+                    Get-CyotProvider $root $src invalid -SourceRepository 'siyixian/ExternalPhoneProvider-AzureFunction-Sample'
+                } $packageRoot $source
+            } 'telesign, soprano'
         }
         Test-Case 'Fork release URLs are accepted only for an explicitly selected fork' {
             $repository = 'siyixian/ExternalPhoneProvider-AzureFunction-Sample'
@@ -848,14 +863,15 @@ try {
             Assert-True ($run.Calls -notcontains 'provider register' -and $run.Calls -notcontains 'geoRegions') 'Preflight mutated registration or required a registered Web provider.'
         }
     }
-    Test-Case 'Only missing inputs prompt, then one language, provider, prefix, and approval' {
-        $run = Invoke-FlowFixture -Omit TenantId, Location, Language, Provider, ResourcePrefix `
-            -Answers @('', 'not-a-guid', '11111111-1111-1111-1111-111111111111', 'westus2', 'invalid', '1', 'invalid', '1', 'contoso', 'Yes')
+    Test-Case 'Only missing inputs prompt, then language, provider, channel, endpoint region, prefix, and approval' {
+        $run = Invoke-FlowFixture -Omit TenantId, Location, Language, Provider, Channel, EndpointRegion, ResourcePrefix `
+            -Answers @('', 'not-a-guid', '11111111-1111-1111-1111-111111111111', 'westus2',
+                'invalid', '1', 'invalid', '1', 'invalid', '1', 'invalid', '1', 'contoso', 'Yes')
         Assert-True (-not $run.Error) "Flow failed: $($run.Error)"
         Assert-True (@($run.Trace | Where-Object { $_ -like 'prompt:SubscriptionId*' -or $_ -like 'prompt:ApplicationId*' }).Count -eq 0) 'Supplied inputs were requested again.'
         Assert-True (@($run.Trace | Where-Object { $_ -like 'prompt:Deploy*' }).Count -eq 1) 'Extra deployment approvals appeared.'
         $trace = $run.Trace -join "`n"
-        Assert-True ($trace -match '(?s)prompt:TenantId.*prompt:Location.*prompt:Language.*prompt:Provider.*download:.*prompt:ResourcePrefix.*preflight.*prompt:Deploy.*certificate.*az:deployment sub create') 'Input/approval/deployment order changed.'
+        Assert-True ($trace -match '(?s)prompt:TenantId.*prompt:Location.*prompt:Language.*prompt:Provider.*download:.*prompt:Channel.*prompt:EndpointRegion.*prompt:ResourcePrefix.*preflight.*prompt:Deploy.*certificate.*az:deployment sub create') 'Input/approval/deployment order changed.'
         Assert-True ($trace -notmatch 'prompt:PackageUrl|prompt:PackageSha256') 'Customer was asked to find a package link or hash.'
         Assert-True ($run.Text.IndexOf('Deployment plan') -lt $run.Text.IndexOf('Deploying Bicep')) 'Deployment started before the preview.'
     }
@@ -864,7 +880,10 @@ try {
         $forkSource = "https://raw.githubusercontent.com/$repository/$('a' * 40)/CYOT-Setup"
         $run = Invoke-FlowFixture -Overrides @{ SourceRepository = $repository; SourceBaseUri = $forkSource } -Answers @('No')
         Assert-True (-not $run.Error -and $run.Trace -contains "download:$forkSource/providers/telesign.json") "Provider did not use the fork: $($run.Error)"
-        $mismatch = Invoke-FlowFixture -Overrides @{ SourceRepository = $repository } -Answers @()
+        $mismatch = Invoke-FlowFixture -Overrides @{
+            SourceRepository = $repository
+            SourceBaseUri = "https://raw.githubusercontent.com/Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample/$('a' * 40)/CYOT-Setup"
+        } -Answers @()
         Assert-True ($mismatch.Error -match 'commit-pinned selected repository' -and $mismatch.Trace -notcontains 'preflight') 'Cross-repository provider content was accepted.'
     }
     foreach ($answer in @('No', '')) {
@@ -884,12 +903,28 @@ try {
         Assert-True (-not $run.Error -and $null -ne $run.Result) "Deployment fixture failed: $($run.Error)"
         Assert-True (@($run.Trace | Where-Object { $_ -eq 'az:deployment sub create' }).Count -eq 1) 'Expected one Bicep deployment.'
         Assert-True ($run.Parameters.providerSettings.value.EPP_PROVIDER_RETRY_INTERVAL_MS -ceq '30000') 'Provider configuration was not passed to Bicep.'
+        Assert-True ($run.Parameters.providerSettings.value.EPP_PROVIDER_CHANNEL -ceq 'sms' -and
+            $run.Parameters.providerSettings.value.EPP_PROVIDER_ENDPOINT_REGION -ceq 'global') 'The selected provider route was not passed to Bicep.'
         foreach ($name in $run.Parameters.resourceNames.value.Values) { Assert-True ($run.Text.Contains($name)) "Unpreviewed resource $name" }
         Assert-True (($run.Trace -join "`n") -match '(?s)az:deployment sub create.*private-key.*application-endpoint.*az:rest --method get.*az:storage blob upload.*public:Enabled.*az:functionapp restart.*az:rest --method post.*az:functionapp function list') 'Authentication/publication ordering changed.'
         Assert-True ($run.Federation -eq $false) 'API-key samples should not create an unnecessary federated application credential.'
         Assert-True ($run.Result.policyChanged -eq $false) 'Setup changed policy.'
         Assert-True ($run.ProviderRegistrations.Count -eq 0) 'Already registered providers were registered again.'
         Assert-True (@(Get-ChildItem $run.Inputs.OutputDirectory -Filter 'deployment-*.json').Count -eq 1) 'No persistent summary was written.'
+    }
+    Test-Case 'Soprano selects OAuth route settings and creates outbound federation' {
+        $profile = Get-Content (Join-Path $packageRoot 'providers/soprano.json') -Raw
+        $run = Invoke-FlowFixture -ProfileJson $profile -Overrides @{
+            Provider = 'soprano'; Channel = 'voice'; EndpointRegion = 'eu'
+        }
+        Assert-True (-not $run.Error -and $run.Federation -eq $true) "Soprano OAuth deployment failed: $($run.Error)"
+        Assert-True ($run.Parameters.providerSettings.value.EPP_PROVIDER_AUTH_MODE -ceq 'oauth' -and
+            $run.Parameters.providerSettings.value.EPP_PROVIDER_CHANNEL -ceq 'voice' -and
+            $run.Parameters.providerSettings.value.EPP_PROVIDER_ENDPOINT_REGION -ceq 'eu') 'Soprano route/auth settings were not passed to Azure.'
+        Assert-True ($run.Parameters.providerSettings.value.EPP_PROVIDER_ENDPOINT -ceq 'https://soprano-eu.example.invalid/voice' -and
+            $run.Parameters.providerSettings.value.EPP_PROVIDER_SCOPE -ceq 'api://00000000-0000-0000-0000-000000000000/.default') 'Soprano OAuth endpoint or scope was not selected from its profile.'
+        Assert-True ($run.Result.providerAuthentication -ceq 'oauth' -and $run.Result.channel -ceq 'voice' -and
+            $run.Result.endpointRegion -ceq 'eu') 'The deployment summary omitted the selected Soprano route.'
     }
     Test-Case 'Missing Microsoft.Web is registered once after approval and before certificate/resource creation' {
         $run = Invoke-FlowFixture -Fault provider-missing
@@ -1079,9 +1114,8 @@ try {
             Assert-True (-not $run.Error -and $run.Result.language -eq $language) "Language deployment failed: $($run.Error)"
             Assert-True ($run.Parameters.language.value -eq $language) 'Bicep did not receive the selected runtime.'
             Assert-True ($run.Result.testConfiguration -and $run.Parameters.providerSettings.value.EPP_PROVIDER_TEST_CONFIGURATION -ceq 'true') 'Test configuration was not labelled in actual app settings.'
-            Assert-True ($run.Parameters.providerSettings.value.EPP_PROVIDER_TENANT_ID -ceq '00000000-0000-0000-0000-000000000000' -and
-                $run.Parameters.providerSettings.value.EPP_PROVIDER_ENDPOINT -ceq 'https://telesign.example.invalid') 'Dummy values were not passed to Azure settings.'
-            Assert-True ($run.Parameters.providerSettings.value.EPP_PROVIDER_AUTH_MODE -ceq 'apiKey') 'The package authentication contract was misrepresented.'
+            Assert-True ($run.Parameters.providerSettings.value.EPP_PROVIDER_ENDPOINT -ceq 'https://rest-ww.telesign.com/integration/microsoft-cyot/sms') 'The selected provider route was not passed to Azure settings.'
+            Assert-True ($run.Parameters.providerSettings.value.EPP_PROVIDER_AUTH_MODE -ceq 'apiKey') 'The provider authentication contract was misrepresented.'
             if ($language -eq 'dotnet') {
                 Assert-True ($run.Result.sourcePackageSha256 -cne $run.Result.packageSha256) '.NET source was treated as compiled output.'
             }
@@ -1101,20 +1135,20 @@ try {
     try {
         Test-Case 'Language catalog exactly matches the three documented release choices' {
             $expected = @{
-                javascript = 'epp-packages-preview-20260914/epp-javascript.zip'
-                dotnet = 'epp-dotnet-source-preview-20260915/epp-dotnet-source.zip'
-                python = 'epp-packages-preview-20260914/epp-python-source.zip'
+                javascript = 'epp-provider-auth-preview-20260915/epp-javascript.zip'
+                dotnet = 'epp-provider-auth-preview-20260915/epp-dotnet-source.zip'
+                python = 'epp-provider-auth-preview-20260915/epp-python-source.zip'
             }
             $catalog = Get-Content (Join-Path $packageRoot 'packages/catalog.json') -Raw | ConvertFrom-Json
             Assert-True ($catalog.packages.Count -eq 3) 'Language menu must contain exactly three choices.'
             foreach ($language in $expected.Keys) {
                 $selection = & $packageTests {
                     param($root, $language)
-                    Get-CyotLanguage -AssetDirectory $root -Language $language -SourceRepository 'Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample' -NonInteractive
+                    Get-CyotLanguage -AssetDirectory $root -Language $language -SourceRepository 'siyixian/ExternalPhoneProvider-AzureFunction-Sample' -NonInteractive
                 } $packageRoot $language
-                Assert-True ($selection.Url -ceq "https://github.com/Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample/releases/download/$($expected[$language])") "Wrong release for $language."
+                Assert-True ($selection.Url -ceq "https://github.com/siyixian/ExternalPhoneProvider-AzureFunction-Sample/releases/download/$($expected[$language])") "Wrong release for $language."
             }
-            $dotnet = & $packageTests { param($root) Get-CyotLanguage $root '.NET' 'Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample' -NonInteractive } $packageRoot
+            $dotnet = & $packageTests { param($root) Get-CyotLanguage $root '.NET' 'siyixian/ExternalPhoneProvider-AzureFunction-Sample' -NonInteractive } $packageRoot
             Assert-True ($dotnet.Id -eq 'dotnet') '.NET display-name selection failed.'
         }
         Test-Case 'Published checksums require one exact filename and cannot fall back to another asset' {

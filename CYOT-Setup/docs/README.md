@@ -8,15 +8,17 @@ The customer does not clone this repository or download Bicep/support scripts se
 
 ## Availability
 
-Choose **JavaScript, .NET, or Python**, then **Telesign or Soprano**. Setup uses the exact preview
-links from [Download a Function ZIP](../../README.md#download-a-function-zip). There is no package URL
-or checksum to enter. It verifies `SHA256SUMS.txt` automatically and performs the required build
-and publication for the selected language.
+Choose **JavaScript, .NET, or Python**, then **Telesign or Soprano**, **SMS or voice**, and a
+**Global or EU endpoint**. The private test branch uses its matching fork preview release so the
+package and provider-authentication contract stay in sync. There is no package URL or checksum to
+enter. Setup verifies `SHA256SUMS.txt` automatically and performs the required build and publication
+for the selected language.
 
-Missing provider fields now contain **explicit dummy test values**, not empty values that block
-setup. They are written into the Function App's **actual environment settings** after approval.
-Telesign's supplied URLs, publisher metadata, and timings are preserved; unconfirmed fields use
-zero GUIDs and `example.invalid` URLs. Soprano uses labelled test defaults.
+Provider profiles contain complete channel/region route objects. Unknown values use **explicit dummy
+test values**, not a separate placeholder list or empty fields that block setup. They are written
+into the Function App's **actual environment settings** after approval. Telesign's supplied global
+URLs, publisher metadata, and timings are preserved; its EU routes and application IDs use test
+values. Soprano uses labelled test tenant, scope, app-ID, endpoint, and timing values.
 The plan and saved summary identify test configuration. Deployment does not make these values
 working endpoints or credentials; see [provider ownership](../providers/README.md).
 
@@ -42,14 +44,14 @@ Use a dedicated nonproduction tenant/subscription for the first deployment.
    and configures the corresponding v1 or v2 issuer/audience. Leave **`tokenEncryptionKeyId` null**:
    Easy Auth expects a signed bearer JWT. Payload JWE encryption is separate.
 5. Complete provider purchase, account/sender registration, and onboarding for the selected adapter.
-   The linked sample packages use provider **API keys**, stored in Key Vault under the adapter's
-   exact secret names. Provider tenant/scope/app-ID metadata does not switch them to Entra token
-   exchange. Setup does not grant provider API permissions or request/store provider credentials.
+   Telesign uses `telesign-api-key` and `telesign-customer-id` in Key Vault. Soprano uses OAuth
+   client-assertion exchange with the selected provider tenant/scope/application ID. Setup does not
+   grant provider API consent or application roles.
 
 Step 2 still configures endpoint-specific properties on this **existing** application: its
 hostname-based identifier URI and public JWE encryption certificate. Those changes are included
-in the single deployment approval. The current API-key packages do not create an outbound
-application federated credential.
+in the single deployment approval. Soprano additionally creates the disclosed outbound
+managed-identity federated credential; Telesign does not.
 
 ## Prerequisites for Step 2
 
@@ -117,11 +119,14 @@ The flow is:
    are reused without prompts. Credentials are never requested as ordinary string parameters.
 2. **Choose one language**. Setup looks up its GitHub release and checksum file in
    `packages/catalog.json`; there are no `PackageUrl` or `PackageSha256` inputs.
-3. **Choose a provider**. Setup downloads its JSON and reads endpoints, tenant/scope/app-ID metadata,
-   timeout, and retry interval. Explicit test values are allowed, shown as test configuration, and
-   passed to Azure settings. Malformed or disabled profiles still fail before resource creation.
-4. **Enter a resource prefix**, such as `contoso`: 2-10 lowercase letters/digits, starting with a
-   letter. Every top-level resource name starts with it. A deterministic suffix derived from the
+3. **Choose a provider**, then **SMS or voice**, then **Global or EU endpoint**. Setup downloads the
+   provider JSON and resolves one complete route containing endpoint, authentication, app-ID/scope
+   when applicable, timeout, and retry interval. Explicit test values are allowed, shown as test
+   configuration, and passed to Azure settings. Malformed or disabled profiles still fail before
+   resource creation.
+4. **Enter a resource prefix**, such as `contoso`: 2-8 lowercase letters/digits, starting with a
+   letter. Every top-level resource name then adds the meaningful `epp` marker, for example
+   `contoso-epp-rg-<suffix>`. A deterministic suffix derived from the
    subscription, application ID, and prefix reduces global-name collisions. Reruns use the same names.
 5. **Review the complete plan**, including resource names, tenant/subscription, language, automatic
    package verification/build, provider
