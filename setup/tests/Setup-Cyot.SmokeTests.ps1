@@ -9,7 +9,7 @@ $entryPoint = Join-Path $packageRoot 'Setup-Cyot.ps1'
 $modulePath = Join-Path $packageRoot 'support/Cyot.Setup.psm1'
 $packageHelperPath = Join-Path $packageRoot 'support/Cyot.Packages.ps1'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) "cyot-tests-$([Guid]::NewGuid().ToString('N'))"
-$source = 'https://raw.githubusercontent.com/siyixian/ExternalPhoneProvider-AzureFunction-Sample/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/CYOT-Setup'
+$source = 'https://raw.githubusercontent.com/siyixian/ExternalPhoneProvider-AzureFunction-Sample/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/setup'
 $failures = [Collections.Generic.List[string]]::new()
 $passed = 0
 
@@ -547,7 +547,7 @@ try {
         $run = Invoke-LauncherFixture
         Assert-True (-not $run.Error -and $run.Result.Invoked) "Launcher failed: $($run.Error)"
         Assert-True ($run.ApiCalls -eq 1 -and $run.Downloads.Count -eq 6) 'Unexpected bootstrap requests.'
-        $expected = "https://raw.githubusercontent.com/Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample/$('a' * 40)/CYOT-Setup/"
+        $expected = "https://raw.githubusercontent.com/Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample/$('a' * 40)/setup/"
         Assert-True (@($run.Downloads | Where-Object { -not $_.Uri.StartsWith($expected) }).Count -eq 0) 'Mixed or untrusted source revisions.'
         Assert-True ($run.Result.Prefix -eq 'contoso' -and $run.Result.Tenant -like '11111111-*') 'Parameters were not forwarded.'
         Assert-True (@($run.Downloads | Where-Object { Test-Path -LiteralPath $_.Path }).Count -eq 0) 'Temporary downloads survived completion.'
@@ -561,7 +561,7 @@ try {
         $run = Invoke-LauncherFixture -SourceRepository $repository -SourceRef 'test/cyot-single-script'
         Assert-True (-not $run.Error -and $run.Result.Repository -ceq $repository) "Fork launch failed: $($run.Error)"
         Assert-True ($run.ApiUri -ceq "https://api.github.com/repos/$repository/commits/test%2Fcyot-single-script") 'The selected fork/ref was not resolved correctly.'
-        $expected = "https://raw.githubusercontent.com/$repository/$('a' * 40)/CYOT-Setup/"
+        $expected = "https://raw.githubusercontent.com/$repository/$('a' * 40)/setup/"
         Assert-True ($run.Downloads.Count -eq 6 -and @($run.Downloads | Where-Object { -not $_.Uri.StartsWith($expected) }).Count -eq 0) 'A support file came from upstream instead of the fork.'
     }
     foreach ($repository in @('https://github.com/owner/repo', 'owner/repo/extra', 'owner/repo?token=value', '../repo')) {
@@ -595,9 +595,9 @@ try {
 
     $module = Import-Module $modulePath -Force -PassThru
     try {
-        Test-Case 'Telesign manifest retains exact channel URLs, timings, and publisher tenant' {
+        Test-Case 'Simplified Telesign profile retains exact channel URLs and timings' {
             $profile = Get-Content (Join-Path $packageRoot 'providers/telesign.json') -Raw | ConvertFrom-Json -AsHashtable
-            Assert-True ($profile.publisher.tenantId -eq 'd818b557-ea1c-4070-a3f1-928330b7a30c') 'Publisher was changed.'
+            Assert-True (@($profile.Keys).Count -eq 1 -and $profile.Contains('deployment')) 'Non-deployment provider metadata returned.'
             Assert-True ($profile.deployment.routes.sms.global.endpoint -ceq 'https://rest-ww.telesign.com/integration/microsoft-cyot/sms') 'SMS URL was changed.'
             Assert-True ($profile.deployment.routes.voice.global.endpoint -ceq 'https://rest-ww.telesign.com/integration/microsoft-cyot/voice') 'Voice URL was changed.'
             $result = & $module { param($profile) ConvertTo-CyotProviderSettings $profile telesign Telesign sms global -NonInteractive } $profile
@@ -614,7 +614,13 @@ try {
                 Assert-True ($result.AuthenticationMode -ceq $expectedAuth -and $result.Settings.EPP_PROVIDER_AUTH_MODE -ceq $expectedAuth) 'Provider authentication was not profile-owned.'
                 Assert-True (-not $profile.deployment.Contains('placeholderFields')) 'The provider profile still contains placeholderFields.'
                 $profile.deployment.testConfiguration = $false
-                Assert-Throws { & $module { param($p, $id) ConvertTo-CyotProviderSettings $p $id $id sms global -NonInteractive } $profile $provider } 'not deployment-ready'
+                if ($provider -eq 'soprano') {
+                    Assert-Throws { & $module { param($p, $id) ConvertTo-CyotProviderSettings $p $id $id sms global -NonInteractive } $profile $provider } 'not deployment-ready'
+                }
+                else {
+                    $live = & $module { param($p, $id) ConvertTo-CyotProviderSettings $p $id $id sms global -NonInteractive } $profile $provider
+                    Assert-True (-not $live.IsTestConfiguration) 'A complete Telesign profile could not disable its test label.'
+                }
             }
         }
         foreach ($invalid in @(-1, 2147484, '30', 1.5)) {
@@ -877,12 +883,12 @@ try {
     }
     Test-Case 'Selected provider JSON uses the same fork and commit as the downloaded tools' {
         $repository = 'siyixian/ExternalPhoneProvider-AzureFunction-Sample'
-        $forkSource = "https://raw.githubusercontent.com/$repository/$('a' * 40)/CYOT-Setup"
+        $forkSource = "https://raw.githubusercontent.com/$repository/$('a' * 40)/setup"
         $run = Invoke-FlowFixture -Overrides @{ SourceRepository = $repository; SourceBaseUri = $forkSource } -Answers @('No')
         Assert-True (-not $run.Error -and $run.Trace -contains "download:$forkSource/providers/telesign.json") "Provider did not use the fork: $($run.Error)"
         $mismatch = Invoke-FlowFixture -Overrides @{
             SourceRepository = $repository
-            SourceBaseUri = "https://raw.githubusercontent.com/Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample/$('a' * 40)/CYOT-Setup"
+            SourceBaseUri = "https://raw.githubusercontent.com/Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample/$('a' * 40)/setup"
         } -Answers @()
         Assert-True ($mismatch.Error -match 'commit-pinned selected repository' -and $mismatch.Trace -notcontains 'preflight') 'Cross-repository provider content was accepted.'
     }

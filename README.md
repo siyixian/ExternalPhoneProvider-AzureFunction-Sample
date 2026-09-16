@@ -27,7 +27,7 @@ and deploying, step by step.
 
 ## Guided CYOT setup
 
-Use **[CYOT-Setup](CYOT-Setup/docs/README.md)** for **Step 2: endpoint deployment**. Download only
+Use **[setup](setup/docs/README.md)** for **Step 2: endpoint deployment**. Download only
 `Setup-Cyot.ps1`; it downloads its supporting tools, Bicep, and provider JSON from GitHub. Supply
 missing customer settings, select **JavaScript, .NET, or Python**, choose Telesign or Soprano,
 **SMS or voice**, **Global or EU**, enter a resource prefix, and approve one complete resource plan.

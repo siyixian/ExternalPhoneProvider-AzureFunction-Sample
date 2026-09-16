@@ -19,7 +19,7 @@ account and environment. Individual API contracts stay in the adapters.
 
 ### Guided setup compatibility
 
-The [CYOT Step 2 setup](../CYOT-Setup/docs/README.md) uses one downloadable launcher, GitHub-hosted
+The [CYOT Step 2 setup](../setup/docs/README.md) uses one downloadable launcher, GitHub-hosted
 language/provider catalogs, and one Bicep deployment approval. It downloads the selected language
 ZIP, verifies its published checksum automatically, builds .NET for Linux or requests Azure remote
 build for Python, and deploys the ready-to-run result. Application registration and policy activation

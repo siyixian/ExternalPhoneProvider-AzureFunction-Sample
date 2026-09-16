@@ -73,8 +73,8 @@ arguments from saved commands.
 This is intentional for deployment testing. Both JSON profiles explicitly use
 `deployment.testConfiguration: true`. Every SMS/voice and Global/EU route is complete; zero GUIDs
 and `example.invalid` URLs are written into the actual Function App environment when that route is
-selected, with `EPP_PROVIDER_TEST_CONFIGURATION=true`. Telesign's supplied global channel URLs,
-timings, and publisher metadata are retained.
+selected, with `EPP_PROVIDER_TEST_CONFIGURATION=true`. Telesign's supplied channel URLs and timings
+are retained.
 
 The script can deploy code with these values, but dummy routes cannot deliver real messages.
 Update the provider-owned profile before live use. Telesign requires its API-key secrets in Key

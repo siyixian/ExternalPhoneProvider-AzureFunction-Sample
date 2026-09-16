@@ -16,9 +16,9 @@ for the selected language.
 
 Provider profiles contain complete channel/region route objects. Unknown values use **explicit dummy
 test values**, not a separate placeholder list or empty fields that block setup. They are written
-into the Function App's **actual environment settings** after approval. Telesign's supplied global
-URLs, publisher metadata, and timings are preserved; its EU routes and application IDs use test
-values. Soprano uses labelled test tenant, scope, app-ID, endpoint, and timing values.
+into the Function App's **actual environment settings** after approval. Telesign's supplied route
+URLs and timings are preserved. Soprano uses labelled test tenant, scope, app-ID, endpoint, and
+timing values.
 The plan and saved summary identify test configuration. Deployment does not make these values
 working endpoints or credentials; see [provider ownership](../providers/README.md).
 
@@ -107,7 +107,7 @@ Download and inspect [Setup-Cyot.ps1](../Setup-Cyot.ps1), or save it from the up
 
 ```powershell
 Invoke-WebRequest `
-    -Uri 'https://raw.githubusercontent.com/Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample/main/CYOT-Setup/Setup-Cyot.ps1' `
+    -Uri 'https://raw.githubusercontent.com/Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample/main/setup/Setup-Cyot.ps1' `
     -OutFile .\Setup-Cyot.ps1
 .\Setup-Cyot.ps1
 ```
@@ -196,7 +196,7 @@ Open PowerShell 7 on Windows in an empty test folder. Replace the owner below wi
 $repository = '<your-GitHub-login>/ExternalPhoneProvider-AzureFunction-Sample'
 $ref = 'test/cyot-single-script'
 Invoke-WebRequest `
-    -Uri "https://raw.githubusercontent.com/$repository/$ref/CYOT-Setup/Setup-Cyot.ps1" `
+    -Uri "https://raw.githubusercontent.com/$repository/$ref/setup/Setup-Cyot.ps1" `
     -OutFile .\Setup-Cyot.ps1
 .\Setup-Cyot.ps1 -SourceRepository $repository -SourceRef $ref
 ```
@@ -254,8 +254,8 @@ value through the still-supported contract; resource deletion is not a policy ro
 These checks are offline and do not sign in, deploy Azure resources, or call providers:
 
 ```powershell
-pwsh -NoProfile -File .\CYOT-Setup\tests\Setup-Cyot.SmokeTests.ps1
-az bicep build --file .\CYOT-Setup\infra\main.bicep --outfile "$env:TEMP\cyot-main.json"
+pwsh -NoProfile -File .\setup\tests\Setup-Cyot.SmokeTests.ps1
+az bicep build --file .\setup\infra\main.bicep --outfile "$env:TEMP\cyot-main.json"
 ```
 
 The smoke suite substitutes GitHub downloads, input prompts, and Azure/Graph boundaries, including

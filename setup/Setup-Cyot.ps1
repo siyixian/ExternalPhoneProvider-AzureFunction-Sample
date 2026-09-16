@@ -53,7 +53,7 @@ try {
         $revision = $commit.sha
     }
     if ($revision -notmatch '^[0-9a-fA-F]{40}$') { throw 'GitHub did not return a valid commit ID.' }
-    $sourceBaseUri = "https://raw.githubusercontent.com/$repository/$revision/CYOT-Setup"
+    $sourceBaseUri = "https://raw.githubusercontent.com/$repository/$revision/setup"
     Write-Host "Downloading deployment tools from $repository at $revision"
 
     foreach ($file in @('support/Cyot.Setup.psm1', 'support/Cyot.Packages.ps1', 'providers/catalog.json', 'packages/catalog.json', 'infra/main.bicep', 'infra/resources.bicep')) {

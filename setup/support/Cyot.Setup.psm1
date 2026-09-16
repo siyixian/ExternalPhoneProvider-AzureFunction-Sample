@@ -118,7 +118,7 @@ function Get-CyotProvider {
         [string] $SourceRepository = 'Azure-Samples/ExternalPhoneProvider-AzureFunction-Sample'
     )
 
-    $sourcePattern = '^https://raw\.githubusercontent\.com/' + [regex]::Escape($SourceRepository) + '/[0-9a-fA-F]{40}/CYOT-Setup$'
+    $sourcePattern = '^https://raw\.githubusercontent\.com/' + [regex]::Escape($SourceRepository) + '/[0-9a-fA-F]{40}/setup$'
     if ($SourceBaseUri -cnotmatch $sourcePattern) {
         throw 'Provider files must come from the same commit-pinned selected repository as the deployment tools.'
     }
@@ -159,7 +159,7 @@ function ConvertTo-CyotProviderSettings {
     if ($deployment['enabled'] -isnot [bool] -or -not $deployment['enabled']) {
         $issues.Add('the provider owner has not enabled this profile')
     }
-    if ($deployment['providerName'] -cne $Id) { $issues.Add('deployment.providerName must match the catalog ID') }
+    if ($deployment['providerName'] -ine $Id) { $issues.Add('deployment.providerName must match the catalog ID or display name') }
 
     $authentication = $deployment['authentication']
     if ($authentication -isnot [Collections.IDictionary] -or $authentication['mode'] -notin @('apiKey', 'oauth')) {

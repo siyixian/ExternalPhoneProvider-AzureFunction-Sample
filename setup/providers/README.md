@@ -22,10 +22,9 @@ writes them into the actual Function App environment. It also writes
 The flag is a label; it is not a runtime authentication or delivery control.
 Malformed values, disabled profiles, and invalid customer IDs are still rejected.
 
-Telesign's supplied publisher tenant, global channel URLs, supported-channel metadata, and timing
-values remain unchanged. Its EU routes and application IDs are explicit test values. Soprano's
-tenant, scopes, application IDs, endpoints, and timings are explicit test values, not production
-claims. There is no separate `placeholderFields` list; the complete route objects are authoritative.
+Telesign's supplied channel URLs and timing values remain unchanged. Soprano's tenant, scopes,
+application IDs, endpoints, and timings are explicit test values, not production claims. There is
+no separate `placeholderFields` list; the complete route objects are authoritative.
 
 ## Environment mapping
 
@@ -66,6 +65,5 @@ Store real provider credentials in Key Vault, never in JSON or application envir
 | Telesign | `telesign-api-key`, `telesign-customer-id` |
 | Soprano | None; OAuth tenant/scope/app IDs come from the provider profile |
 
-The public `$schema` identifies the supplied manifest format. The `deployment` object is this
-sample's local extension, not a claim that it belongs to the upstream schema. Additional provider
-metadata is preserved; it is not silently translated into unsupported application behavior.
+The provider files intentionally contain only the local `deployment` contract consumed by this
+script. Marketplace, marketing, certification, and other metadata are not required for deployment.

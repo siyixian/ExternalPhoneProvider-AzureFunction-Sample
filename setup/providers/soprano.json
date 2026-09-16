@@ -1,24 +1,8 @@
 {
-  "$schema": "https://schemas.microsoft.com/entra/cyot/package-manifest/v1",
-  "descriptor": {
-    "name": "soprano-cyot",
-    "displayName": "Soprano",
-    "version": "0.1.0",
-    "description": "OAuth-based Soprano CYOT provider configuration.",
-    "category": "Telephony",
-    "previewState": "TestConfiguration"
-  },
-  "publisher": {
-    "tenantId": "00000000-0000-0000-0000-000000000000"
-  },
-  "metadata": {
-    "supportedChannels": ["sms", "voice"],
-    "supportedRegions": ["global", "eu"]
-  },
   "deployment": {
     "enabled": true,
     "testConfiguration": true,
-    "providerName": "soprano",
+    "providerName": "Soprano",
     "authentication": {
       "mode": "oauth",
       "tenantId": "00000000-0000-0000-0000-000000000000"
